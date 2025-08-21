@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{io::Write, net::TcpListener};
+use std::{io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -11,11 +11,26 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                _stream.write_all(b"+PONG\r\n").unwrap();
+                handle_connection(_stream);
             }
             Err(e) => {
                 println!("error: {}", e);
             }
+        }
+    }
+}
+
+fn handle_connection(mut stream: TcpStream) {
+    let buf_reader = BufReader::new(&stream);
+    let messages: Vec<_> = buf_reader
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+
+    for message in messages {
+        if message.eq_ignore_ascii_case("PING") {
+            stream.write(b"+PONG\r\n").unwrap();
         }
     }
 }
