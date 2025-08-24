@@ -1,12 +1,13 @@
 #![allow(unused_imports)]
-use tokio::io;
+mod protocol;
+
 use tokio::{
-    io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Result},
     net::{TcpListener, TcpStream},
 };
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
     loop {
