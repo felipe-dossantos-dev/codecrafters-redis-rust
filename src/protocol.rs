@@ -1,8 +1,3 @@
-// *2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n
-// significa que é um array com 2 elementos
-// $4 significa que é uma string de tamanho 4
-// $3 significa que é uma string de tamanho 3
-
 // eu tenho que implementar um protocolo minimo
 // o que seria esse protocolo minimo? seria uma classe que pega uma buffer e transforma um comando do redis
 // e depois essa mesma classe transforma uma comando em um buffer para escrever
@@ -16,49 +11,18 @@
 //  - Caso tiver dúvidas utilizar o gemini para ele não responder com o código que tenho que escrever
 // - Criar uma outra estrutura para entender e validar os comandos
 
-// 1. A struct e sua implementação
-// struct Person {
-//     name: String,
-//     age: u32,
-// }
-
-// impl Person {
-//     fn new(name: String, age: u32) -> Self {
-//         Self { name, age }
-//     }
-
-//     // Nota: Testar funções que imprimem na tela (com side-effects)
-//     // é mais complexo. Para testes unitários, focamos em funções
-//     // que retornam valores ou mudam o estado da struct.
-//     fn greet(&self) {
-//         println!(
-//             "Olá, meu nome é {} e eu tenho {} anos.",
-//             self.name, self.age
-//         );
-//     }
-// }
+use std::str::FromStr;
 
 
 /// Representa um valor no Redis Serialization Protocol (RESP).
 /// `#[derive(Debug, PartialEq)]` nos permite imprimir para depuração e comparar valores nos testes.
 #[derive(Debug, PartialEq)]
 pub enum RespValue {
-    /// Representa strings simples. Começa com `+`. Ex: `+OK\r\n`
     SimpleString(String),
-
-    /// Representa erros. Começa com `-`. Ex: `-Error message\r\n`
     Error(String),
-
-    /// Representa inteiros. Começa com `:`. Ex: `:1000\r\n`
     Integer(i64),
-
-    /// Representa strings binariamente seguras. Começa com `$`. Ex: `$6\r\nfoobar\r\n`
     BulkString(Vec<u8>),
-
-    /// Representa uma lista de outros tipos RESP. Começa com `*`. Ex: `*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n`
     Array(Vec<RespValue>),
-
-    /// Representa a ausência de valor (null). Em RESP2, é codificado como `_\r\n` (Null Bulk String).
     Null,
 }
 
@@ -66,14 +30,27 @@ impl RespValue {
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             RespValue::SimpleString(s) => format!("+{}\r\n", s).into_bytes(),
-            _ => String::from("").into_bytes()
+            RespValue::Error(s) => format!("-{}\r\n", s).into_bytes(),
+            RespValue::Integer(s) => format!(":{}\r\n", s).into_bytes(),
+            RespValue::BulkString(s) => {
+                let mut result = format!("${}\r\n", s.len()).into_bytes();
+                result.extend_from_slice(s);
+                result.extend_from_slice(b"\r\n");
+                result
+            }
+            RespValue::Array(arr) => {
+                let mut result = format!("*{}\r\n", arr.len()).into_bytes();
+                for elem in arr {
+                    result.extend(elem.serialize());    
+                }
+                result
+            }
+            _ => format!("_\r\n").into_bytes()
+            // TODO - implementar os tests
         }
     }
 }
 
-// criar a struct / impl
-
-// 2. O módulo de testes
 // A anotação `#[cfg(test)]` diz ao compilador para só incluir
 // este código quando executamos `cargo test`.
 #[cfg(test)]
@@ -81,34 +58,54 @@ mod tests {
     // `use super::*;` importa tudo do módulo pai (neste caso, Person).
     use super::*;
 
-    // A anotação `#[test]` marca esta função como um teste.
-    
-    fn test_array_creation() {
-        let arr = RespValue::Array(vec![
-            RespValue::BulkString(b"ECHO".to_vec()),
-            RespValue::BulkString(b"hey".to_vec()),
-        ]);
-
-        let expected = RespValue::Array(vec![
-            RespValue::BulkString(vec![69, 67, 72, 79]), // "ECHO" em bytes
-            RespValue::BulkString(vec![104, 101, 121]), // "hey" em bytes
-        ]);
-
-        assert_eq!(arr, expected);
+    #[test]
+    fn test_simple_string_serialization() {
+        let result = RespValue::SimpleString(String::from("hey")).serialize();
+        let expected = String::from("+hey\r\n").into_bytes();
+        assert_eq!(result, expected)
     }
 
-    // #[test]
-    // fn test_new_person_initializes_correctly() {
-    //     // Arrange: Preparamos os dados para o teste.
-    //     let name = String::from("Carlos");
-    //     let age = 45;
+    #[test]
+    fn test_error_serialization() {
+        let result = RespValue::Error(String::from("hey")).serialize();
+        let expected = String::from("-hey\r\n").into_bytes();
+        assert_eq!(result, expected)
+    }
 
-    //     // Act: Executamos a função que queremos testar.
-    //     let person = Person::new(name.clone(), age);
+    #[test]
+    fn test_integer_serialization() {
+        let result = RespValue::Integer(128).serialize();
+        let expected = String::from(":128\r\n").into_bytes();
+        assert_eq!(result, expected)
+    }
 
-    //     // Assert: Verificamos se o resultado é o esperado.
-    //     // A macro `assert_eq!` falha o teste se os dois lados não forem iguais.
-    //     assert_eq!(person.name, "Carlos");
-    //     assert_eq!(person.age, 45);
-    // }
+    #[test]
+    fn test_bulk_string_serialization() {
+        let result = RespValue::BulkString(b"foobar".to_vec()).serialize();
+        let expected = b"$6\r\nfoobar\r\n".to_vec();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_empty_bulk_string_serialization() {
+        let result = RespValue::BulkString(b"".to_vec()).serialize();
+        let expected = b"$0\r\n\r\n".to_vec();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_null_serialization() {
+        let result = RespValue::Null.serialize();
+        let expected = b"_\r\n".to_vec();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_empty_array_serialization() {
+        let result = RespValue::Array(vec![RespValue::Integer(128), RespValue::BulkString(b"foobar".to_vec())]).serialize();
+        let expected = b"*2\r\n:128\r\n$6\r\nfoobar\r\n".to_vec();
+        assert_eq!(result, expected);
+    }
+
+
 }
