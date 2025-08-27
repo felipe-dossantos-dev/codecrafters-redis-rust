@@ -38,14 +38,32 @@ async fn client_process(mut stream: TcpStream) {
                 let request = buf[0..n].to_vec();
                 let resps = RespValue::parse(request);
                 println!("Received: {:?}", resps);
-                if resps[0] == RespValue::BulkString(String::from("PING").into_bytes()) {
-                    if stream.write_all(&RespValue::BulkString(String::from("PONG").into_bytes()).serialize()).await.is_err() {
-                        return;
+                match &resps[0] {
+                    RespValue::BulkString(s) => {
+                        if *s == b"PING".to_vec() {
+                            println!("ping command");
+                            if stream.write_all(&RespValue::SimpleString(String::from("PONG")).serialize()).await.is_err() {
+                                return;
+                            }
+                        }
                     }
-                } else if resps[0] == RespValue::BulkString(String::from("ECHO").into_bytes()) {
-                    if stream.write_all(&resps[1].serialize()).await.is_err() {
-                        return;
+                    RespValue::Array(ref arr) => {
+                        if arr.len() > 0 {
+                            if let RespValue::BulkString(s) = &arr[0] {
+                                if s.to_ascii_uppercase() == b"ECHO".to_vec() {
+                                    if arr.len() > 1 {
+                                        if stream.write_all(&arr[1].serialize()).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                    RespValue::SimpleString(_) => todo!(),
+                    RespValue::Error(_) => todo!(),
+                    RespValue::Integer(_) => todo!(),
+                    RespValue::Null => todo!(),
                 }
             }
             Err(e) => {
