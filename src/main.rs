@@ -42,7 +42,13 @@ async fn client_process(mut stream: TcpStream) {
                     RespValue::BulkString(s) => {
                         if *s == b"PING".to_vec() {
                             println!("ping command");
-                            if stream.write_all(&RespValue::SimpleString(String::from("PONG")).serialize()).await.is_err() {
+                            if stream
+                                .write_all(
+                                    &RespValue::SimpleString(String::from("PONG")).serialize(),
+                                )
+                                .await
+                                .is_err()
+                            {
                                 return;
                             }
                         }
@@ -55,6 +61,19 @@ async fn client_process(mut stream: TcpStream) {
                                         if stream.write_all(&arr[1].serialize()).await.is_err() {
                                             return;
                                         }
+                                    }
+                                }
+                                if *s == b"PING".to_vec() {
+                                    println!("ping command");
+                                    if stream
+                                        .write_all(
+                                            &RespValue::SimpleString(String::from("PONG"))
+                                                .serialize(),
+                                        )
+                                        .await
+                                        .is_err()
+                                    {
+                                        return;
                                     }
                                 }
                             }
