@@ -6,6 +6,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+use crate::protocol::RespValue;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
@@ -32,9 +34,17 @@ async fn client_process(mut stream: TcpStream) {
     loop {
         match stream.read(&mut buf).await {
             Ok(0) => return,
-            Ok(_) => {
-                if stream.write_all(b"+PONG\r\n").await.is_err() {
-                    return;
+            Ok(n) => {
+                let request = buf[0..n].to_vec();
+                let resps = RespValue::parse(request);
+                if resps[0] == RespValue::BulkString(String::from("PING").into_bytes()) {
+                    if stream.write_all(&RespValue::BulkString(String::from("PONG").into_bytes()).serialize()).await.is_err() {
+                        return;
+                    }
+                } else if resps[0] == RespValue::BulkString(String::from("ECHO").into_bytes()) {
+                    if stream.write_all(&resps[1].serialize()).await.is_err() {
+                        return;
+                    }
                 }
             }
             Err(e) => {
