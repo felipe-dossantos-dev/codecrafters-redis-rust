@@ -37,6 +37,7 @@ async fn client_process(mut stream: TcpStream) {
             Ok(n) => {
                 let request = buf[0..n].to_vec();
                 let resps = RespValue::parse(request);
+                println!("Received: {:?}", resps);
                 if resps[0] == RespValue::BulkString(String::from("PING").into_bytes()) {
                     if stream.write_all(&RespValue::BulkString(String::from("PONG").into_bytes()).serialize()).await.is_err() {
                         return;
