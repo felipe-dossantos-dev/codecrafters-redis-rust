@@ -67,7 +67,7 @@ async fn client_process(mut stream: TcpStream) {
                                     println!("ping command");
                                     if stream
                                         .write_all(
-                                            &RespValue::SimpleString(String::from("PONG"))
+                                            &RespValue::simple_string("PONG")
                                                 .serialize(),
                                         )
                                         .await

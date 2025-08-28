@@ -1,15 +1,3 @@
-// eu tenho que implementar um protocolo minimo
-// o que seria esse protocolo minimo? seria uma classe que pega uma buffer e transforma um comando do redis
-// e depois essa mesma classe transforma uma comando em um buffer para escrever
-// esse seria o modulo para implementar esse protocolo
-// como eu organizaria isso em questao de dados e enums
-// a IA acabou gerando o RespValue para mim, o que não gostei, mas segue o jogo
-// os passos seriam:
-// - Terminar o parse e serialize do RespValue (que são os tipos de dados do Redis)
-//  - serialize feito, agora é fazer o parse
-//  - Fazer os testes unitários sozinho para melhorar meu entendimento da linguagem - OK
-//  - Caso tiver dúvidas utilizar o gemini para ele não responder com o código que tenho que escrever - OK
-// - Criar uma outra estrutura para entender e validar os comandos
 const SYMBOL_SIMPLE_STRING: char = '+';
 const SYMBOL_ERROR: char = '-';
 const SYMBOL_INTEGER: char = ':';
@@ -69,6 +57,14 @@ impl RespValue {
             _parse(&mut values_iter, &mut results);
         }
         return results;
+    }
+
+    pub fn bulk_string(value: &str) -> RespValue {
+        return RespValue::BulkString(String::from(value).into_bytes());
+    }
+
+    pub fn simple_string(value: &str) -> RespValue {
+        return RespValue::SimpleString(String::from(value));
     }
 }
 
@@ -134,6 +130,46 @@ fn _parse(values_iter: &mut std::vec::IntoIter<u8>, results: &mut Vec<RespValue>
             }
         }
         _ => (),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RedisCommand {
+    Get(String),
+    Set(String, String),
+    Ping,
+    Echo(String),
+}
+
+impl RedisCommand {
+    pub fn build(values: Vec<RespValue>) -> Vec<RedisCommand> {
+        let mut commands: Vec<RedisCommand> = Vec::new();
+        let mut values_iter = values.iter();
+        for value in values_iter {
+            match value {
+                // TODO - implementar pensando no pipeline
+                // TODO - implementar ECHO
+                // TODO - implementar GET
+                // TODO - implementar SET
+                RespValue::SimpleString(s) => {
+                    check_ping_command(&mut commands, s);
+                },
+                RespValue::BulkString(items) => {
+                    let value_str = String::from_utf8(items.clone()).unwrap();
+                    check_ping_command(&mut commands, &value_str);
+                },
+                RespValue::Integer(_) => todo!(),
+                RespValue::Array(resp_values) => todo!(),
+                _ => (),
+            }
+        }
+        return commands;
+    }
+}
+
+fn check_ping_command(commands: &mut Vec<RedisCommand>, value: &String) {
+    if value.eq_ignore_ascii_case("ping") {
+        commands.push(RedisCommand::Ping);
     }
 }
 
@@ -250,6 +286,17 @@ mod tests {
     #[test]
     fn test_parse_array() {
         let result = RespValue::parse(b"*1\r\n$6\r\nfoobar\r\n".to_vec());
-        assert_eq!(result, vec![RespValue::Array(vec![RespValue::BulkString(b"foobar".to_vec())])]);
+        assert_eq!(
+            result,
+            vec![RespValue::Array(vec![RespValue::BulkString(
+                b"foobar".to_vec()
+            )])]
+        );
+    }
+
+    #[test]
+    fn test_commands_build_ping() {
+        let result = RedisCommand::build(vec![RespValue::bulk_string("ping"), RespValue::simple_string("ping")]);
+        assert_eq!(result, vec![RedisCommand::Ping, RedisCommand::Ping]);
     }
 }
