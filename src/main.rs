@@ -35,6 +35,9 @@ async fn main() -> Result<()> {
 async fn client_process(mut stream: TcpStream) {
     let mut buf = [0; 512];
 
+    let pairs: Arc<Mutex<HashMap<String, String>>> =
+                    Arc::new(Mutex::new(HashMap::new()));
+
     loop {
         match stream.read(&mut buf).await {
             Ok(0) => return,
@@ -42,15 +45,11 @@ async fn client_process(mut stream: TcpStream) {
                 let request = buf[0..n].to_vec();
                 let received_commands = RedisCommand::parse(request);
 
-                let pairs: Arc<Mutex<HashMap<String, String>>> =
-                    Arc::new(Mutex::new(HashMap::new()));
-
                 for command in received_commands {
                     match command {
-                        RedisCommand::Get(key) => match key {
-                            RedisType::BulkString(s) => {
-                                let key_string = String::from_utf8(s).unwrap();
-                                match pairs.lock().await.get(key_string.as_str()) {
+                        RedisCommand::Get(key) => match &key {
+                            RedisType::BulkString(_) => {
+                                match pairs.lock().await.get(&key.to_string()) {
                                     Some(val) => {
                                         write_stream(&mut stream, &RedisType::bulk_string(val)).await;
                                     }
