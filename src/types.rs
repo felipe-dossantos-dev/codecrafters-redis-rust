@@ -3,7 +3,6 @@ const SYMBOL_ERROR: char = '-';
 const SYMBOL_INTEGER: char = ':';
 const SYMBOL_BULK_STRING: char = '$';
 const SYMBOL_ARRAY: char = '*';
-const SYMBOL_NULL: char = '_';
 const SYMBOL_END_COMMAND: &'static str = "\r\n";
 
 #[derive(Debug, PartialEq)]
@@ -43,7 +42,7 @@ impl RedisType {
                 }
                 result
             }
-            _ => format!("{}{}", SYMBOL_NULL, SYMBOL_END_COMMAND).into_bytes(),
+            _ => format!("{}-1{}", SYMBOL_BULK_STRING, SYMBOL_END_COMMAND).into_bytes(),
         }
     }
 
@@ -111,11 +110,7 @@ fn _parse(values_iter: &mut std::vec::IntoIter<u8>, results: &mut Vec<RedisType>
             let content_str = String::from_utf8(content_bytes).unwrap();
             let number: i64 = content_str.parse().unwrap();
             results.push(RedisType::Integer(number));
-        }
-        SYMBOL_NULL => {
-            read_next_word(values_iter);
-            results.push(RedisType::Null);
-        }
+        },
         SYMBOL_BULK_STRING => {
             let length_bytes = read_next_word(values_iter);
             let length_str = String::from_utf8(length_bytes).unwrap();
@@ -191,7 +186,7 @@ mod tests {
     #[test]
     fn test_serialize_null() {
         let result = RedisType::Null.serialize();
-        let expected = b"_\r\n".to_vec();
+        let expected = b"$-1\r\n".to_vec();
         assert_eq!(result, expected);
     }
 
@@ -208,8 +203,8 @@ mod tests {
 
     #[test]
     fn test_parse_null() {
-        let result = RedisType::parse(b"_\r\n".to_vec());
-        assert_eq!(result, vec![RedisType::Null])
+        let result = RedisType::parse(b"$-1\r\n".to_vec());
+        assert_eq!(result, vec![RedisType::Null]);
     }
 
     #[test]
