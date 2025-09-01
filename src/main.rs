@@ -1,12 +1,16 @@
 #![allow(unused_imports)]
-mod protocol;
+mod commands;
+mod types;
+
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
 
 use tokio::{
     io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Result},
     net::{TcpListener, TcpStream},
+    sync::Mutex,
 };
 
-use crate::protocol::RespValue;
+use crate::{commands::RedisCommand, types::RedisType};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,53 +40,53 @@ async fn client_process(mut stream: TcpStream) {
             Ok(0) => return,
             Ok(n) => {
                 let request = buf[0..n].to_vec();
-                let resps = RespValue::parse(request);
-                println!("Received: {:?}", resps);
-                match &resps[0] {
-                    RespValue::BulkString(s) => {
-                        if *s == b"PING".to_vec() {
-                            println!("ping command");
-                            if stream
-                                .write_all(
-                                    &RespValue::SimpleString(String::from("PONG")).serialize(),
-                                )
-                                .await
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                    }
-                    RespValue::Array(ref arr) => {
-                        if arr.len() > 0 {
-                            if let RespValue::BulkString(s) = &arr[0] {
-                                if s.to_ascii_uppercase() == b"ECHO".to_vec() {
-                                    if arr.len() > 1 {
-                                        if stream.write_all(&arr[1].serialize()).await.is_err() {
-                                            return;
-                                        }
+                let received_values = RedisType::parse(request);
+                println!("Received values: {:?}", received_values);
+
+                let received_commands = RedisCommand::build(received_values);
+                println!("Received commands: {:?}", received_commands);
+
+                let mut pairs: Arc<Mutex<HashMap<String, String>>> =
+                    Arc::new(Mutex::new(HashMap::new()));
+
+                for command in received_commands {
+                    match command {
+                        RedisCommand::Get(key) => match key {
+                            RedisType::BulkString(s) => {
+                                let key_string = String::from_utf8(s).unwrap();
+                                match pairs.lock().await.get(key_string.as_str()) {
+                                    Some(val) => {
+                                        write_stream(&mut stream, &RedisType::bulk_string(val)).await;
                                     }
-                                }
-                                if *s == b"PING".to_vec() {
-                                    println!("ping command");
-                                    if stream
-                                        .write_all(
-                                            &RespValue::simple_string("PONG")
-                                                .serialize(),
-                                        )
-                                        .await
-                                        .is_err()
-                                    {
-                                        return;
+                                    None => {
+                                        write_stream(&mut stream, &RedisType::Null).await;
                                     }
                                 }
                             }
+                            _ => (),
+                        },
+                        RedisCommand::Set(key, value) => match (key, value) {
+                            (RedisType::BulkString(s_key), RedisType::BulkString(s_value))  => {
+                                let key_string = String::from_utf8(s_key).unwrap();
+                                let value_string = String::from_utf8(s_value).unwrap();
+                                match pairs.lock().await.insert(key_string, value_string) {
+                                    Some(_) => {
+                                        write_stream(&mut stream, &RedisType::ok()).await;
+                                    }
+                                    None => {
+                                        write_stream(&mut stream, &RedisType::Null).await;
+                                    }
+                                }
+                            }
+                            _ => (),
+                        },
+                        RedisCommand::Ping => {
+                            write_stream(&mut stream, &RedisType::pong()).await;
+                        }
+                        RedisCommand::Echo(value) => {
+                            write_stream(&mut stream, &value).await;
                         }
                     }
-                    RespValue::SimpleString(_) => todo!(),
-                    RespValue::Error(_) => todo!(),
-                    RespValue::Integer(_) => todo!(),
-                    RespValue::Null => todo!(),
                 }
             }
             Err(e) => {
@@ -90,5 +94,17 @@ async fn client_process(mut stream: TcpStream) {
                 return;
             }
         }
+    }
+}
+
+async fn write_stream(stream: &mut TcpStream, value: &RedisType){
+    if stream
+        .write_all(
+            &value.serialize()
+        )
+        .await
+        .is_err()
+    {
+        println!("error writing in stream");
     }
 }
