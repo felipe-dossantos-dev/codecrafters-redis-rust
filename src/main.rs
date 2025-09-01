@@ -40,13 +40,9 @@ async fn client_process(mut stream: TcpStream) {
             Ok(0) => return,
             Ok(n) => {
                 let request = buf[0..n].to_vec();
-                let received_values = RedisType::parse(request);
-                println!("Received values: {:?}", received_values);
+                let received_commands = RedisCommand::parse(request);
 
-                let received_commands = RedisCommand::build(received_values);
-                println!("Received commands: {:?}", received_commands);
-
-                let mut pairs: Arc<Mutex<HashMap<String, String>>> =
+                let pairs: Arc<Mutex<HashMap<String, String>>> =
                     Arc::new(Mutex::new(HashMap::new()));
 
                 for command in received_commands {
@@ -65,18 +61,10 @@ async fn client_process(mut stream: TcpStream) {
                             }
                             _ => (),
                         },
-                        RedisCommand::Set(key, value) => match (key, value) {
-                            (RedisType::BulkString(s_key), RedisType::BulkString(s_value))  => {
-                                let key_string = String::from_utf8(s_key).unwrap();
-                                let value_string = String::from_utf8(s_value).unwrap();
-                                match pairs.lock().await.insert(key_string, value_string) {
-                                    Some(_) => {
-                                        write_stream(&mut stream, &RedisType::ok()).await;
-                                    }
-                                    None => {
-                                        write_stream(&mut stream, &RedisType::Null).await;
-                                    }
-                                }
+                        RedisCommand::Set(key, value) => match (&key, &value) {
+                            (RedisType::BulkString(_), RedisType::BulkString(_))  => {                                
+                                pairs.lock().await.insert(key.to_string(), value.to_string());
+                                write_stream(&mut stream, &RedisType::ok()).await;
                             }
                             _ => (),
                         },

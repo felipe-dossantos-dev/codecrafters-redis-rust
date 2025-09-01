@@ -72,10 +72,19 @@ impl RedisType {
         return RedisType::simple_string("PONG");
     }
 
+    pub fn to_string(&self) -> String {
+        match self {
+            RedisType::SimpleString(val) => val.to_string(),
+            RedisType::Error(val) => val.to_string(),
+            RedisType::Integer(val) => format!("{}", val),
+            RedisType::BulkString(val) => String::from_utf8(val.to_vec()).unwrap(),
+            _ => String::new(),
+        }
+    }
+
+    #[cfg(test)]
     pub fn new_array(values: Vec<&str>) -> RedisType {
-        let bulk_string = values.iter()
-            .map(|x| Self::bulk_string(x))
-            .collect();
+        let bulk_string = values.iter().map(|x| Self::bulk_string(x)).collect();
         RedisType::Array(bulk_string)
     }
 }
@@ -110,7 +119,7 @@ fn _parse(values_iter: &mut std::vec::IntoIter<u8>, results: &mut Vec<RedisType>
             let content_str = String::from_utf8(content_bytes).unwrap();
             let number: i64 = content_str.parse().unwrap();
             results.push(RedisType::Integer(number));
-        },
+        }
         SYMBOL_BULK_STRING => {
             let length_bytes = read_next_word(values_iter);
             let length_str = String::from_utf8(length_bytes).unwrap();

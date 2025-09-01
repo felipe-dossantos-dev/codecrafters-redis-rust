@@ -41,9 +41,7 @@ impl RedisCommand {
                                     }
                                 }
                                 "SET" => {
-                                    if let (Some(key), Some(value)) =
-                                        (args.next(), args.next())
-                                    {
+                                    if let (Some(key), Some(value)) = (args.next(), args.next()) {
                                         commands.push(RedisCommand::Set(key, value));
                                     }
                                 }
@@ -62,6 +60,16 @@ impl RedisCommand {
             }
         }
         commands
+    }
+
+    pub fn parse(values: Vec<u8>) -> Vec<RedisCommand>{
+        let received_values = RedisType::parse(values);
+        println!("Received values: {:?}", received_values);
+
+        let received_commands = Self::build(received_values);
+        println!("Received commands: {:?}", received_commands);
+        
+        return received_commands;
     }
 }
 
@@ -101,7 +109,10 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["set", "test", "test"])]);
         assert_eq!(
             result,
-            vec![RedisCommand::Set(RedisType::bulk_string("test"), RedisType::bulk_string("test"))]
+            vec![RedisCommand::Set(
+                RedisType::bulk_string("test"),
+                RedisType::bulk_string("test")
+            )]
         );
     }
 }
