@@ -1,11 +1,66 @@
-/// Representa um valor no Redis Serialization Protocol (RESP).
-/// `#[derive(Debug, PartialEq)]` nos permite imprimir para depuração e comparar valores nos testes.
+use std::{
+    time::{SystemTime, UNIX_EPOCH},
+    vec::IntoIter,
+};
+
 use crate::types::RedisType;
+
+#[derive(Debug, PartialEq)]
+pub struct RedisKeyValue {
+    value: String,
+    expired_at_millis: Option<u128>,
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Problem with time!")
+        .as_millis()
+}
+
+impl RedisKeyValue {
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub fn is_valid(&self) -> bool {
+        if let Some(val) = self.expired_at_millis {
+            return val > now_millis();
+        }
+        true
+    }
+
+    pub fn parse(mut args: IntoIter<RedisType>) -> Option<Self> {
+        let mut expired_at_millis: Option<u128> = None;
+
+        if let Some(value) = args.next() {
+            while let Some(prop_name) = args.next() {
+                match prop_name.to_string().to_ascii_uppercase().as_str() {
+                    "PX" => {
+                        if let Some(ttl_arg) = args.next() {
+                            let ttl_value: u128 = ttl_arg
+                                .to_string()
+                                .parse()
+                                .expect("Cannot parse the integer value");
+                            expired_at_millis = Some(now_millis() + ttl_value);
+                        }
+                    }
+                    _ => (),
+                }
+            }
+            return Some(Self {
+                value: value.to_string(),
+                expired_at_millis: expired_at_millis,
+            });
+        }
+        return None;
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum RedisCommand {
     Get(RedisType),
-    Set(RedisType, RedisType),
+    Set(RedisType, RedisKeyValue),
     Ping,
     Echo(RedisType),
 }
@@ -41,8 +96,10 @@ impl RedisCommand {
                                     }
                                 }
                                 "SET" => {
-                                    if let (Some(key), Some(value)) = (args.next(), args.next()) {
-                                        commands.push(RedisCommand::Set(key, value));
+                                    if let Some(key) = args.next() {
+                                        let key_value = RedisKeyValue::parse(args)
+                                            .expect("Erro ao fazer parse do valor e das configs");
+                                        commands.push(RedisCommand::Set(key, key_value));
                                     }
                                 }
                                 _ => {}
@@ -62,13 +119,13 @@ impl RedisCommand {
         commands
     }
 
-    pub fn parse(values: Vec<u8>) -> Vec<RedisCommand>{
+    pub fn parse(values: Vec<u8>) -> Vec<RedisCommand> {
         let received_values = RedisType::parse(values);
         println!("Received values: {:?}", received_values);
 
         let received_commands = Self::build(received_values);
         println!("Received commands: {:?}", received_commands);
-        
+
         return received_commands;
     }
 }
@@ -111,8 +168,46 @@ mod tests {
             result,
             vec![RedisCommand::Set(
                 RedisType::bulk_string("test"),
-                RedisType::bulk_string("test")
+                RedisKeyValue {
+                    value: "test".to_string(),
+                    expired_at_millis: None
+                }
             )]
         );
+    }
+
+    #[test]
+    fn test_commands_build_set_with_px() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "set", "key", "value", "PX", "100",
+        ])]);
+        assert_eq!(result.len(), 1);
+        let command = &result[0];
+        if let RedisCommand::Set(key, key_value) = command {
+            assert_eq!(*key, RedisType::bulk_string("key"));
+            assert_eq!(key_value.value(), "value");
+            assert!(key_value.expired_at_millis.is_some());
+        } else {
+            panic!("Expected RedisCommand::Set, but got {:?}", command);
+        }
+    }
+
+    #[test]
+    fn test_commands_build_set_with_px_case_insensitive() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "set", "key", "value", "pX", "100",
+        ])]);
+        assert_eq!(result.len(), 1);
+        let command = &result[0];
+        if let RedisCommand::Set(key, key_value) = command {
+            assert_eq!(*key, RedisType::bulk_string("key"));
+            assert_eq!(key_value.value(), "value");
+            assert!(
+                key_value.expired_at_millis.is_some(),
+                "PX option should be case-insensitive"
+            );
+        } else {
+            panic!("Expected RedisCommand::Set, but got {:?}", command);
+        }
     }
 }

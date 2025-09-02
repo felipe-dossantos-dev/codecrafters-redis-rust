@@ -10,7 +10,10 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::{commands::RedisCommand, types::RedisType};
+use crate::{
+    commands::{RedisCommand, RedisKeyValue},
+    types::RedisType,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,8 +38,7 @@ async fn main() -> Result<()> {
 async fn client_process(mut stream: TcpStream) {
     let mut buf = [0; 512];
 
-    let pairs: Arc<Mutex<HashMap<String, String>>> =
-                    Arc::new(Mutex::new(HashMap::new()));
+    let pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>> = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         match stream.read(&mut buf).await {
@@ -51,7 +53,16 @@ async fn client_process(mut stream: TcpStream) {
                             RedisType::BulkString(_) => {
                                 match pairs.lock().await.get(&key.to_string()) {
                                     Some(val) => {
-                                        write_stream(&mut stream, &RedisType::bulk_string(val)).await;
+                                        if val.is_valid() {
+                                            write_stream(
+                                                &mut stream,
+                                                &RedisType::bulk_string(val.value()),
+                                            )
+                                            .await;
+                                        } else {
+                                            pairs.lock().await.remove(&key.to_string());
+                                            write_stream(&mut stream, &RedisType::Null).await;
+                                        }
                                     }
                                     None => {
                                         write_stream(&mut stream, &RedisType::Null).await;
@@ -60,13 +71,10 @@ async fn client_process(mut stream: TcpStream) {
                             }
                             _ => (),
                         },
-                        RedisCommand::Set(key, value) => match (&key, &value) {
-                            (RedisType::BulkString(_), RedisType::BulkString(_))  => {                                
-                                pairs.lock().await.insert(key.to_string(), value.to_string());
-                                write_stream(&mut stream, &RedisType::ok()).await;
-                            }
-                            _ => (),
-                        },
+                        RedisCommand::Set(key, value) => {
+                            pairs.lock().await.insert(key.to_string(), value);
+                            write_stream(&mut stream, &RedisType::ok()).await;
+                        }
                         RedisCommand::Ping => {
                             write_stream(&mut stream, &RedisType::pong()).await;
                         }
@@ -84,14 +92,8 @@ async fn client_process(mut stream: TcpStream) {
     }
 }
 
-async fn write_stream(stream: &mut TcpStream, value: &RedisType){
-    if stream
-        .write_all(
-            &value.serialize()
-        )
-        .await
-        .is_err()
-    {
+async fn write_stream(stream: &mut TcpStream, value: &RedisType) {
+    if stream.write_all(&value.serialize()).await.is_err() {
         println!("error writing in stream");
     }
 }
