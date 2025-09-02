@@ -53,7 +53,6 @@ async fn client_process(mut stream: TcpStream) {
                             RedisType::BulkString(_) => {
                                 match pairs.lock().await.get(&key.to_string()) {
                                     Some(val) => {
-                                        print!("{:?}", val);
                                         if val.is_valid() {
                                             write_stream(
                                                 &mut stream,
