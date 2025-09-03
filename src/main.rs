@@ -1,8 +1,7 @@
 #![allow(unused_imports)]
 mod commands;
 mod types;
-
-use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::{
     io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Result},
@@ -18,14 +17,18 @@ use crate::{
 #[tokio::main]
 async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
+    let pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>> = Arc::new(Mutex::new(HashMap::new()));
+    let lists: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         let _stream = listener.accept().await;
         match _stream {
             Ok((stream, _)) => {
                 println!("accepted new connection");
+                let pairs_clone = pairs.clone();
+                let lists_clone = lists.clone();
                 tokio::spawn(async move {
-                    client_process(stream).await;
+                    client_process(stream, pairs_clone, lists_clone).await;
                 });
             }
             Err(e) => {
@@ -35,11 +38,12 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn client_process(mut stream: TcpStream) {
+async fn client_process(
+    mut stream: TcpStream,
+    pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>>,
+    lists: Arc<Mutex<HashMap<String, Vec<String>>>>,
+) {
     let mut buf = [0; 512];
-
-    let pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>> = Arc::new(Mutex::new(HashMap::new()));
-    let lists: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         match stream.read(&mut buf).await {
@@ -49,55 +53,8 @@ async fn client_process(mut stream: TcpStream) {
                 let received_commands = RedisCommand::parse(request);
 
                 for command in received_commands {
-                    match command {
-                        RedisCommand::GET(key) => match &key {
-                            RedisType::BulkString(_) => {
-                                match pairs.lock().await.get(&key.to_string()) {
-                                    Some(val) => {
-                                        if val.is_valid() {
-                                            write_stream(
-                                                &mut stream,
-                                                &RedisType::bulk_string(val.value()),
-                                            )
-                                            .await;
-                                        } else {
-                                            write_stream(&mut stream, &RedisType::Null).await;
-                                        }
-                                    }
-                                    None => {
-                                        write_stream(&mut stream, &RedisType::Null).await;
-                                    }
-                                }
-                            }
-                            _ => (),
-                        },
-                        RedisCommand::SET(key, value) => {
-                            pairs.lock().await.insert(key.to_string(), value);
-                            write_stream(&mut stream, &RedisType::ok()).await;
-                        }
-                        RedisCommand::PING => {
-                            write_stream(&mut stream, &RedisType::pong()).await;
-                        }
-                        RedisCommand::ECHO(value) => {
-                            write_stream(&mut stream, &value).await;
-                        },
-                        RedisCommand::RPUSH(key, values) => match &key {
-                            RedisType::BulkString(_) => {
-                                let key_str = key.to_string();
-                                match lists.lock().await.get_mut(&key_str) {
-                                    Some(list_values) => {
-                                        list_values.extend_from_slice(values.as_slice());
-                                        let len: i64 = list_values.len().try_into().expect("Error to convert list length");
-                                        write_stream(&mut stream, &RedisType::Integer(len)).await;
-                                    }
-                                    None => {
-                                        lists.lock().await.insert(key_str, values).expect("cant add to the hashmap");
-                                        write_stream(&mut stream, &RedisType::Integer(1)).await;
-                                    }
-                                }
-                            }
-                            _ => (),
-                        }
+                    if let Some(response) = handle_command(command, &pairs, &lists).await {
+                        write_stream(&mut stream, &response).await;
                     }
                 }
             }
@@ -109,8 +66,90 @@ async fn client_process(mut stream: TcpStream) {
     }
 }
 
+async fn handle_command(
+    command: RedisCommand,
+    pairs: &Arc<Mutex<HashMap<String, RedisKeyValue>>>,
+    lists: &Arc<Mutex<HashMap<String, Vec<String>>>>,
+) -> Option<RedisType> {
+    match command {
+        RedisCommand::GET(key) => match &key {
+            RedisType::BulkString(_) => {
+                let response = match pairs.lock().await.get(&key.to_string()) {
+                    Some(val) if val.is_valid() => RedisType::bulk_string(val.value()),
+                    _ => RedisType::Null,
+                };
+                Some(response)
+            }
+            _ => None,
+        },
+        RedisCommand::SET(key, value) => {
+            pairs.lock().await.insert(key.to_string(), value);
+            Some(RedisType::ok())
+        }
+        RedisCommand::PING => Some(RedisType::pong()),
+        RedisCommand::ECHO(value) => Some(value),
+        RedisCommand::RPUSH(key, values) => match &key {
+            RedisType::BulkString(_) => {
+                let key_str = key.to_string();
+                let mut lists_guard = lists.lock().await;
+                let list = lists_guard.entry(key_str).or_insert_with(Vec::new);
+                list.extend(values);
+                let len = list.len() as i64;
+                Some(RedisType::Integer(len))
+            }
+            _ => None,
+        },
+    }
+}
+
 async fn write_stream(stream: &mut TcpStream, value: &RedisType) {
     if stream.write_all(&value.serialize()).await.is_err() {
         println!("error writing in stream");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_handle_rpush_new_list() {
+        let lists = Arc::new(Mutex::new(HashMap::new()));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+        let command = RedisCommand::RPUSH(
+            RedisType::bulk_string("mylist"),
+            vec!["one".to_string(), "two".to_string()],
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(result, RedisType::Integer(2));
+        let lists_guard = lists.lock().await;
+        assert_eq!(
+            lists_guard.get("mylist"),
+            Some(&vec!["one".to_string(), "two".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpush_existing_list() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert("mylist".to_string(), vec!["zero".to_string()]);
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::RPUSH(
+            RedisType::bulk_string("mylist"),
+            vec!["one".to_string(), "two".to_string()],
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(result, RedisType::Integer(3));
+        let lists_guard = lists.lock().await;
+        assert_eq!(
+            lists_guard.get("mylist"),
+            Some(&vec!["zero".to_string(), "one".to_string(), "two".to_string()])
+        );
     }
 }
