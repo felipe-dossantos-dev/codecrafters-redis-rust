@@ -112,12 +112,12 @@ async fn handle_command(
             ) => {
                 if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
                     let list_len = list_value.len() as i64;
-                    let final_end_index = if end_index > &list_len { &list_len } else { end_index };
+                    let final_end_index = if end_index > &list_len { &(list_len - 1) } else { end_index };
                     let mut result_list: Vec<RedisType> = Vec::new();
 
                     // TODO: essas validações deveria ser na construção da struct (fica mais facil de testar tbm)
                     if start_index < &list_len && start_index <= final_end_index {
-                        for i in *start_index..*final_end_index {
+                        for i in *start_index..=*final_end_index {
                             result_list.push(RedisType::bulk_string(&list_value[i as usize]));
                         }
                         return Some(RedisType::Array(result_list));
@@ -183,5 +183,102 @@ mod tests {
                 "two".to_string()
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_lrange_non_existent_key() {
+        let lists = Arc::new(Mutex::new(HashMap::new()));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+        let command = RedisCommand::LRANGE(
+            RedisType::bulk_string("no-such-list"),
+            RedisType::Integer(0),
+            RedisType::Integer(1),
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(result, RedisType::Array(vec![]));
+    }
+
+    #[tokio::test]
+    async fn test_handle_lrange_empty_list() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert("mylist".to_string(), vec![]);
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LRANGE(
+            RedisType::bulk_string("mylist"),
+            RedisType::Integer(0),
+            RedisType::Integer(1),
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(result, RedisType::Array(vec![]));
+    }
+
+    #[tokio::test]
+    async fn test_handle_lrange_full_range() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert(
+            "mylist".to_string(),
+            vec!["one".to_string(), "two".to_string(), "three".to_string()],
+        );
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LRANGE(
+            RedisType::bulk_string("mylist"),
+            RedisType::Integer(0),
+            RedisType::Integer(2),
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(
+            result,
+            RedisType::Array(vec![
+                RedisType::bulk_string("one"),
+                RedisType::bulk_string("two"),
+                RedisType::bulk_string("three"),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_lrange_end_out_of_bounds() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert("mylist".to_string(), vec!["one".to_string()]);
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LRANGE(
+            RedisType::bulk_string("mylist"),
+            RedisType::Integer(0),
+            RedisType::Integer(10),
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(result, RedisType::Array(vec![RedisType::bulk_string("one")]));
+    }
+
+    #[tokio::test]
+    async fn test_handle_lrange_start_out_of_bounds() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert("mylist".to_string(), vec!["one".to_string()]);
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LRANGE(
+            RedisType::bulk_string("mylist"),
+            RedisType::Integer(5),
+            RedisType::Integer(10),
+        );
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(result, RedisType::Array(vec![]));
     }
 }
