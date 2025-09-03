@@ -56,6 +56,7 @@ async fn client_process(
 
                 for command in received_commands {
                     if let Some(response) = handle_command(command, &pairs, &lists).await {
+                        print!("{:?}", response);
                         write_stream(&mut stream, &response).await;
                     }
                 }
