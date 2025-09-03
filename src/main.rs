@@ -83,14 +83,15 @@ async fn client_process(mut stream: TcpStream) {
                         },
                         RedisCommand::RPUSH(key, values) => match &key {
                             RedisType::BulkString(_) => {
-                                match lists.lock().await.get_mut(&key.to_string()) {
+                                let key_str = key.to_string();
+                                match lists.lock().await.get_mut(&key_str) {
                                     Some(list_values) => {
                                         list_values.extend_from_slice(values.as_slice());
                                         let len: i64 = list_values.len().try_into().expect("Error to convert list length");
                                         write_stream(&mut stream, &RedisType::Integer(len)).await;
                                     }
                                     None => {
-                                        lists.lock().await.insert(key.to_string(), values);
+                                        lists.lock().await.insert(key_str, values).expect("cant add to the hashmap");
                                         write_stream(&mut stream, &RedisType::Integer(1)).await;
                                     }
                                 }
