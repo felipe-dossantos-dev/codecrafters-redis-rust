@@ -16,6 +16,8 @@ use crate::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // TODO: transformar isso numa classe de RedisServer e já facilitar os testes nessa classe
+    // manter o mecanisco thread safe de acesso das estruturas de dados
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
     let pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>> = Arc::new(Mutex::new(HashMap::new()));
     let lists: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -72,10 +74,13 @@ async fn handle_command(
     lists: &Arc<Mutex<HashMap<String, Vec<String>>>>,
 ) -> Option<RedisType> {
     match command {
+        // TODO: mover esses match do RedisType para os commands, não faz sentido essa validação aqui
+        // o comando já deve vir com os tipos certos senão não deve ser construido
+        // e dar erro quando não conseguir construir um comando válido
         RedisCommand::GET(key) => match &key {
             RedisType::BulkString(_) => {
                 let response = match pairs.lock().await.get(&key.to_string()) {
-                    Some(val) if val.is_valid() => RedisType::bulk_string(val.value()),
+                    Some(val) if !val.is_expired() => RedisType::bulk_string(val.value()),
                     _ => RedisType::Null,
                 };
                 Some(response)
@@ -96,6 +101,29 @@ async fn handle_command(
                 list.extend(values);
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
+            }
+            _ => None,
+        },
+        RedisCommand::LRANGE(key, start, end) => match (&key, &start, &end) {
+            (
+                RedisType::BulkString(_),
+                RedisType::Integer(start_index),
+                RedisType::Integer(end_index),
+            ) => {
+                if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
+                    let list_len = list_value.len() as i64;
+                    let final_end_index = if end_index > &list_len { &list_len } else { end_index };
+                    let mut result_list: Vec<RedisType> = Vec::new();
+
+                    // TODO: essas validações deveria ser na construção da struct (fica mais facil de testar tbm)
+                    if start_index < &list_len && start_index <= final_end_index {
+                        for i in *start_index..*final_end_index {
+                            result_list.push(RedisType::bulk_string(&list_value[i as usize]));
+                        }
+                        return Some(RedisType::Array(result_list));
+                    }
+                }
+                Some(RedisType::Array(vec![]))
             }
             _ => None,
         },
@@ -149,7 +177,11 @@ mod tests {
         let lists_guard = lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
-            Some(&vec!["zero".to_string(), "one".to_string(), "two".to_string()])
+            Some(&vec![
+                "zero".to_string(),
+                "one".to_string(),
+                "two".to_string()
+            ])
         );
     }
 }

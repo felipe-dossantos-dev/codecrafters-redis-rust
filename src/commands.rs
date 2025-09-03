@@ -16,11 +16,11 @@ impl RedisKeyValue {
         &self.value
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub fn is_expired(&self) -> bool {
         if let Some(val) = self.expired_at_millis {
-            return val > now_millis();
+            return val <= now_millis();
         }
-        true
+        false
     }
 
     pub fn parse(mut args: IntoIter<RedisType>) -> Option<Self> {
@@ -57,6 +57,7 @@ pub enum RedisCommand {
     PING,
     ECHO(RedisType),
     RPUSH(RedisType, Vec<String>),
+    LRANGE(RedisType, RedisType, RedisType)
 }
 
 impl RedisCommand {
@@ -100,10 +101,14 @@ impl RedisCommand {
                                     let mut list: Vec<String> = Vec::new();
                                     if let Some(key) = args.next() {
                                         while let Some(value) = args.next() {
-                                            // tem que remover o "" ?
                                             list.push(value.to_string());
                                         }
                                         commands.push(RedisCommand::RPUSH(key, list))
+                                    }
+                                },
+                                "LRANGE" => {
+                                    if let (Some(key), Some(start), Some(end)) = (args.next(), args.next(), args.next()) {
+                                        commands.push(RedisCommand::LRANGE(key, start, end));
                                     }
                                 }
                                 _ => {}
