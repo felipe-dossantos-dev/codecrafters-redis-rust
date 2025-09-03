@@ -11,13 +11,6 @@ pub struct RedisKeyValue {
     expired_at_millis: Option<u128>,
 }
 
-fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Problem with time!")
-        .as_millis()
-}
-
 impl RedisKeyValue {
     pub fn value(&self) -> &str {
         &self.value
@@ -59,10 +52,11 @@ impl RedisKeyValue {
 
 #[derive(Debug, PartialEq)]
 pub enum RedisCommand {
-    Get(RedisType),
-    Set(RedisType, RedisKeyValue),
-    Ping,
-    Echo(RedisType),
+    GET(RedisType),
+    SET(RedisType, RedisKeyValue),
+    PING,
+    ECHO(RedisType),
+    RPUSH(RedisType, Vec<String>),
 }
 
 impl RedisCommand {
@@ -83,23 +77,33 @@ impl RedisCommand {
                         if let Ok(command_name) = String::from_utf8(command_bytes) {
                             match command_name.to_ascii_uppercase().as_str() {
                                 "PING" => {
-                                    commands.push(RedisCommand::Ping);
+                                    commands.push(RedisCommand::PING);
                                 }
                                 "ECHO" => {
                                     if let Some(s) = args.next() {
-                                        commands.push(RedisCommand::Echo(s));
+                                        commands.push(RedisCommand::ECHO(s));
                                     }
                                 }
                                 "GET" => {
                                     if let Some(s) = args.next() {
-                                        commands.push(RedisCommand::Get(s));
+                                        commands.push(RedisCommand::GET(s));
                                     }
                                 }
                                 "SET" => {
                                     if let Some(key) = args.next() {
                                         let key_value = RedisKeyValue::parse(args)
                                             .expect("Erro ao fazer parse do valor e das configs");
-                                        commands.push(RedisCommand::Set(key, key_value));
+                                        commands.push(RedisCommand::SET(key, key_value));
+                                    }
+                                }
+                                "RPUSH" => {
+                                    let mut list: Vec<String> = Vec::new();
+                                    if let Some(key) = args.next() {
+                                        while let Some(value) = args.next() {
+                                            // tem que remover o "" ?
+                                            list.push(value.to_string());
+                                        }
+                                        commands.push(RedisCommand::RPUSH(key, list))
                                     }
                                 }
                                 _ => {}
@@ -108,10 +112,10 @@ impl RedisCommand {
                     }
                 }
                 RedisType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
-                    commands.push(RedisCommand::Ping);
+                    commands.push(RedisCommand::PING);
                 }
                 RedisType::SimpleString(s) if s.eq_ignore_ascii_case("PING") => {
-                    commands.push(RedisCommand::Ping);
+                    commands.push(RedisCommand::PING);
                 }
                 _ => (),
             }
@@ -130,6 +134,13 @@ impl RedisCommand {
     }
 }
 
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Problem with time!")
+        .as_millis()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,7 +151,7 @@ mod tests {
             RedisType::bulk_string("ping"),
             RedisType::simple_string("ping"),
         ]);
-        assert_eq!(result, vec![RedisCommand::Ping, RedisCommand::Ping]);
+        assert_eq!(result, vec![RedisCommand::PING, RedisCommand::PING]);
     }
 
     #[test]
@@ -148,7 +159,7 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["echo", "teste teste"])]);
         assert_eq!(
             result,
-            vec![RedisCommand::Echo(RedisType::bulk_string("teste teste"))]
+            vec![RedisCommand::ECHO(RedisType::bulk_string("teste teste"))]
         );
     }
 
@@ -157,7 +168,7 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["get", "test"])]);
         assert_eq!(
             result,
-            vec![RedisCommand::Get(RedisType::bulk_string("test"))]
+            vec![RedisCommand::GET(RedisType::bulk_string("test"))]
         );
     }
 
@@ -166,7 +177,7 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["set", "test", "test"])]);
         assert_eq!(
             result,
-            vec![RedisCommand::Set(
+            vec![RedisCommand::SET(
                 RedisType::bulk_string("test"),
                 RedisKeyValue {
                     value: "test".to_string(),
@@ -183,7 +194,7 @@ mod tests {
         ])]);
         assert_eq!(result.len(), 1);
         let command = &result[0];
-        if let RedisCommand::Set(key, key_value) = command {
+        if let RedisCommand::SET(key, key_value) = command {
             assert_eq!(*key, RedisType::bulk_string("key"));
             assert_eq!(key_value.value(), "value");
             assert!(key_value.expired_at_millis.is_some());
@@ -199,7 +210,7 @@ mod tests {
         ])]);
         assert_eq!(result.len(), 1);
         let command = &result[0];
-        if let RedisCommand::Set(key, key_value) = command {
+        if let RedisCommand::SET(key, key_value) = command {
             assert_eq!(*key, RedisType::bulk_string("key"));
             assert_eq!(key_value.value(), "value");
             assert!(
@@ -209,5 +220,19 @@ mod tests {
         } else {
             panic!("Expected RedisCommand::Set, but got {:?}", command);
         }
+    }
+
+    #[test]
+    fn test_commands_build_rpush() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "rpush", "mylist", "one", "two",
+        ])]);
+        assert_eq!(
+            result,
+            vec![RedisCommand::RPUSH(
+                RedisType::bulk_string("mylist"),
+                vec!["one".to_string(), "two".to_string()]
+            )]
+        );
     }
 }

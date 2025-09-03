@@ -39,6 +39,7 @@ async fn client_process(mut stream: TcpStream) {
     let mut buf = [0; 512];
 
     let pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>> = Arc::new(Mutex::new(HashMap::new()));
+    let lists: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         match stream.read(&mut buf).await {
@@ -49,7 +50,7 @@ async fn client_process(mut stream: TcpStream) {
 
                 for command in received_commands {
                     match command {
-                        RedisCommand::Get(key) => match &key {
+                        RedisCommand::GET(key) => match &key {
                             RedisType::BulkString(_) => {
                                 match pairs.lock().await.get(&key.to_string()) {
                                     Some(val) => {
@@ -70,15 +71,31 @@ async fn client_process(mut stream: TcpStream) {
                             }
                             _ => (),
                         },
-                        RedisCommand::Set(key, value) => {
+                        RedisCommand::SET(key, value) => {
                             pairs.lock().await.insert(key.to_string(), value);
                             write_stream(&mut stream, &RedisType::ok()).await;
                         }
-                        RedisCommand::Ping => {
+                        RedisCommand::PING => {
                             write_stream(&mut stream, &RedisType::pong()).await;
                         }
-                        RedisCommand::Echo(value) => {
+                        RedisCommand::ECHO(value) => {
                             write_stream(&mut stream, &value).await;
+                        },
+                        RedisCommand::RPUSH(key, values) => match &key {
+                            RedisType::BulkString(_) => {
+                                match lists.lock().await.get_mut(&key.to_string()) {
+                                    Some(list_values) => {
+                                        list_values.extend_from_slice(values.as_slice());
+                                        let len: i64 = list_values.len().try_into().expect("Error to convert list length");
+                                        write_stream(&mut stream, &RedisType::Integer(len)).await;
+                                    }
+                                    None => {
+                                        lists.lock().await.insert(key.to_string(), values);
+                                        write_stream(&mut stream, &RedisType::Integer(1)).await;
+                                    }
+                                }
+                            }
+                            _ => (),
                         }
                     }
                 }
