@@ -57,7 +57,7 @@ pub enum RedisCommand {
     PING,
     ECHO(RedisType),
     RPUSH(RedisType, Vec<String>),
-    LRANGE(RedisType, RedisType, RedisType)
+    LRANGE(String, i64, i64)
 }
 
 impl RedisCommand {
@@ -108,7 +108,9 @@ impl RedisCommand {
                                 },
                                 "LRANGE" => {
                                     if let (Some(key), Some(start), Some(end)) = (args.next(), args.next(), args.next()) {
-                                        commands.push(RedisCommand::LRANGE(key, start, end));
+                                        let start_value: i64 = start.to_string().parse().expect("Expected a integer");
+                                        let end_value: i64 = end.to_string().parse().expect("Expected a integer");
+                                        commands.push(RedisCommand::LRANGE(key.to_string(), start_value, end_value));
                                     }
                                 }
                                 _ => {}

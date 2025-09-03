@@ -56,7 +56,7 @@ async fn client_process(
 
                 for command in received_commands {
                     if let Some(response) = handle_command(command, &pairs, &lists).await {
-                        print!("Response Generated: {:?}", response);
+                        println!("Response Generated: {:?}", response);
                         write_stream(&mut stream, &response).await;
                     }
                 }
@@ -76,8 +76,9 @@ async fn handle_command(
 ) -> Option<RedisType> {
     match command {
         // TODO: mover esses match do RedisType para os commands, não faz sentido essa validação aqui
-        // o comando já deve vir com os tipos certos senão não deve ser construido
+        // o comando já deve vir com os tipos primitivos ou com um objeto válido senão não deve ser construido
         // e dar erro quando não conseguir construir um comando válido
+        // adicionar conversao de String para o valor quando fizer sentido
         RedisCommand::GET(key) => match &key {
             RedisType::BulkString(_) => {
                 let response = match pairs.lock().await.get(&key.to_string()) {
@@ -105,29 +106,26 @@ async fn handle_command(
             }
             _ => None,
         },
-        RedisCommand::LRANGE(key, start, end) => match (&key, &start, &end) {
-            (
-                RedisType::BulkString(_),
-                RedisType::Integer(start_index),
-                RedisType::Integer(end_index),
-            ) => {
-                if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
-                    let list_len = list_value.len() as i64;
-                    let final_end_index = if end_index > &list_len { &(list_len - 1) } else { end_index };
-                    let mut result_list: Vec<RedisType> = Vec::new();
+        RedisCommand::LRANGE(key, start_index, end_index) => {
+            if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
+                let list_len = list_value.len() as i64;
+                let final_end_index = if end_index > list_len {
+                    list_len - 1
+                } else {
+                    end_index
+                };
+                let mut result_list: Vec<RedisType> = Vec::new();
 
-                    // TODO: essas validações deveria ser na construção da struct (fica mais facil de testar tbm)
-                    if start_index < &list_len && start_index <= final_end_index {
-                        for i in *start_index..=*final_end_index {
-                            result_list.push(RedisType::bulk_string(&list_value[i as usize]));
-                        }
-                        return Some(RedisType::Array(result_list));
+                // TODO: essas validações deveria ser na construção da struct (fica mais facil de testar tbm)
+                if start_index < list_len && start_index <= final_end_index {
+                    for i in start_index..=final_end_index {
+                        result_list.push(RedisType::bulk_string(&list_value[i as usize]));
                     }
+                    return Some(RedisType::Array(result_list));
                 }
-                Some(RedisType::Array(vec![]))
             }
-            _ => None,
-        },
+            Some(RedisType::Array(vec![]))
+        }
     }
 }
 
@@ -190,11 +188,7 @@ mod tests {
     async fn test_handle_lrange_non_existent_key() {
         let lists = Arc::new(Mutex::new(HashMap::new()));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
-        let command = RedisCommand::LRANGE(
-            RedisType::bulk_string("no-such-list"),
-            RedisType::Integer(0),
-            RedisType::Integer(1),
-        );
+        let command = RedisCommand::LRANGE("no-such-list".to_string(), 0, 1);
 
         let result = handle_command(command, &pairs, &lists).await.unwrap();
 
@@ -208,11 +202,7 @@ mod tests {
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
-        let command = RedisCommand::LRANGE(
-            RedisType::bulk_string("mylist"),
-            RedisType::Integer(0),
-            RedisType::Integer(1),
-        );
+        let command = RedisCommand::LRANGE("mylist".to_string(), 0, 1);
 
         let result = handle_command(command, &pairs, &lists).await.unwrap();
 
@@ -229,11 +219,7 @@ mod tests {
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
-        let command = RedisCommand::LRANGE(
-            RedisType::bulk_string("mylist"),
-            RedisType::Integer(0),
-            RedisType::Integer(2),
-        );
+        let command = RedisCommand::LRANGE("mylist".to_string(), 0, 2);
 
         let result = handle_command(command, &pairs, &lists).await.unwrap();
 
@@ -254,15 +240,14 @@ mod tests {
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
-        let command = RedisCommand::LRANGE(
-            RedisType::bulk_string("mylist"),
-            RedisType::Integer(0),
-            RedisType::Integer(10),
-        );
+        let command = RedisCommand::LRANGE("mylist".to_string(), 0, 10);
 
         let result = handle_command(command, &pairs, &lists).await.unwrap();
 
-        assert_eq!(result, RedisType::Array(vec![RedisType::bulk_string("one")]));
+        assert_eq!(
+            result,
+            RedisType::Array(vec![RedisType::bulk_string("one")])
+        );
     }
 
     #[tokio::test]
@@ -272,11 +257,7 @@ mod tests {
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
-        let command = RedisCommand::LRANGE(
-            RedisType::bulk_string("mylist"),
-            RedisType::Integer(5),
-            RedisType::Integer(10),
-        );
+        let command = RedisCommand::LRANGE("mylist".to_string(), 5, 10);
 
         let result = handle_command(command, &pairs, &lists).await.unwrap();
 
