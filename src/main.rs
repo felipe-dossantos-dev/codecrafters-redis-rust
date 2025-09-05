@@ -100,7 +100,7 @@ async fn handle_command(
             if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
                 let list_len = list_value.len() as i64;
 
-                let final_end_index = if end_index > list_len {
+                let final_end_index = if end_index > list_len && end_index > 0 {
                     list_len - 1
                 } else {
                     end_index
