@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 mod commands;
 mod types;
+use std::cmp;
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::{
@@ -96,20 +97,26 @@ async fn handle_command(
             let len = list.len() as i64;
             Some(RedisType::Integer(len))
         }
-        RedisCommand::LRANGE(key, start_index, end_index) => {
+        RedisCommand::LRANGE(key, mut start_index, mut end_index) => {
             if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
                 let list_len = list_value.len() as i64;
 
-                let final_end_index = if end_index > list_len && end_index > 0 {
-                    list_len - 1
-                } else {
-                    end_index
+                if end_index > list_len {
+                    end_index = list_len - 1
                 };
+
+                if start_index < 0 {
+                    start_index += list_len
+                }
+
+                if end_index < 0 {
+                    end_index += list_len
+                }
 
                 let mut result_list: Vec<RedisType> = Vec::new();
 
-                if start_index < list_len && start_index <= final_end_index {
-                    for i in start_index..=final_end_index {
+                if start_index < list_len && start_index <= end_index {
+                    for i in start_index..=end_index {
                         result_list.push(RedisType::bulk_string(&list_value[i as usize]));
                     }
                     return Some(RedisType::Array(result_list));
@@ -220,6 +227,48 @@ mod tests {
                 RedisType::bulk_string("one"),
                 RedisType::bulk_string("two"),
                 RedisType::bulk_string("three"),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_lrange_negative_range() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert(
+            "mylist".to_string(),
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string(),
+            ],
+        );
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LRANGE("mylist".to_string(), -2, -1);
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(
+            result,
+            RedisType::Array(vec![
+                RedisType::bulk_string("d"),
+                RedisType::bulk_string("e"),
+            ])
+        );
+
+        let command = RedisCommand::LRANGE("mylist".to_string(), 0, -3);
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(
+            result,
+            RedisType::Array(vec![
+                RedisType::bulk_string("a"),
+                RedisType::bulk_string("b"),
+                RedisType::bulk_string("c"),
             ])
         );
     }
