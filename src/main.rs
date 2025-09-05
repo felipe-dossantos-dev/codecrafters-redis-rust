@@ -101,26 +101,36 @@ async fn handle_command(
             if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
                 let list_len = list_value.len() as i64;
 
+                if start_index > list_len {
+                    return Some(RedisType::Array(vec![]));
+                }
+
+                if start_index < 0 {
+                    start_index += list_len
+                }
+
+                let start = start_index.max(0) as usize;
+
+                if end_index < 0 {
+                    end_index += list_len
+                }
+
                 if end_index > list_len {
                     end_index = list_len - 1
                 };
 
-                while start_index < 0 && list_len > 0 {
-                    start_index += list_len
-                }
+                let end = end_index.max(0) as usize;
 
-                while end_index < 0 && list_len > 0{
-                    end_index += list_len
+                if start_index > end_index {
+                    return Some(RedisType::Array(vec![]));
                 }
 
                 let mut result_list: Vec<RedisType> = Vec::new();
 
-                if start_index < list_len && start_index <= end_index {
-                    for i in start_index..=end_index {
-                        result_list.push(RedisType::bulk_string(&list_value[i as usize]));
-                    }
-                    return Some(RedisType::Array(result_list));
+                for i in start..=end {
+                    result_list.push(RedisType::bulk_string(&list_value[i]));
                 }
+                return Some(RedisType::Array(result_list));
             }
             Some(RedisType::Array(vec![]))
         }
@@ -279,6 +289,10 @@ mod tests {
         assert_eq!(
             result,
             RedisType::Array(vec![
+                RedisType::bulk_string("a"),
+                RedisType::bulk_string("b"),
+                RedisType::bulk_string("c"),
+                RedisType::bulk_string("d"),
                 RedisType::bulk_string("e"),
             ])
         );
