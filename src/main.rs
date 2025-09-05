@@ -105,11 +105,11 @@ async fn handle_command(
                     end_index = list_len - 1
                 };
 
-                if start_index < 0 {
+                while start_index < 0 && list_len > 0 {
                     start_index += list_len
                 }
 
-                if end_index < 0 {
+                while end_index < 0 && list_len > 0{
                     end_index += list_len
                 }
 
@@ -269,6 +269,17 @@ mod tests {
                 RedisType::bulk_string("a"),
                 RedisType::bulk_string("b"),
                 RedisType::bulk_string("c"),
+            ])
+        );
+
+        let command = RedisCommand::LRANGE("mylist".to_string(), -6, -1);
+
+        let result = handle_command(command, &pairs, &lists).await.unwrap();
+
+        assert_eq!(
+            result,
+            RedisType::Array(vec![
+                RedisType::bulk_string("e"),
             ])
         );
     }
