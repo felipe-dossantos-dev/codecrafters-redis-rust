@@ -75,48 +75,39 @@ async fn handle_command(
     lists: &Arc<Mutex<HashMap<String, Vec<String>>>>,
 ) -> Option<RedisType> {
     match command {
-        // TODO: mover esses match do RedisType para os commands, não faz sentido essa validação aqui
-        // o comando já deve vir com os tipos primitivos ou com um objeto válido senão não deve ser construido
-        // e dar erro quando não conseguir construir um comando válido
-        // adicionar conversao de String para o valor quando fizer sentido
-        RedisCommand::GET(key) => match &key {
-            RedisType::BulkString(_) => {
-                let response = match pairs.lock().await.get(&key.to_string()) {
-                    Some(val) if !val.is_expired() => RedisType::bulk_string(val.value()),
-                    _ => RedisType::Null,
-                };
-                Some(response)
-            }
-            _ => None,
-        },
+        RedisCommand::GET(key) => {
+            let response = match pairs.lock().await.get(&key.to_string()) {
+                Some(val) if !val.is_expired() => RedisType::bulk_string(&val.value),
+                _ => RedisType::Null,
+            };
+            Some(response)
+        }
         RedisCommand::SET(key, value) => {
             pairs.lock().await.insert(key.to_string(), value);
             Some(RedisType::ok())
         }
         RedisCommand::PING => Some(RedisType::pong()),
-        RedisCommand::ECHO(value) => Some(value),
-        RedisCommand::RPUSH(key, values) => match &key {
-            RedisType::BulkString(_) => {
-                let key_str = key.to_string();
-                let mut lists_guard = lists.lock().await;
-                let list = lists_guard.entry(key_str).or_insert_with(Vec::new);
-                list.extend(values);
-                let len = list.len() as i64;
-                Some(RedisType::Integer(len))
-            }
-            _ => None,
-        },
+        RedisCommand::ECHO(value) => Some(RedisType::bulk_string(&value)),
+        RedisCommand::RPUSH(key, values) => {
+            let key_str = key.to_string();
+            let mut lists_guard = lists.lock().await;
+            let list = lists_guard.entry(key_str).or_insert_with(Vec::new);
+            list.extend(values);
+            let len = list.len() as i64;
+            Some(RedisType::Integer(len))
+        }
         RedisCommand::LRANGE(key, start_index, end_index) => {
             if let Some(list_value) = lists.lock().await.get(&key.to_string()) {
                 let list_len = list_value.len() as i64;
+
                 let final_end_index = if end_index > list_len {
                     list_len - 1
                 } else {
                     end_index
                 };
+
                 let mut result_list: Vec<RedisType> = Vec::new();
 
-                // TODO: essas validações deveria ser na construção da struct (fica mais facil de testar tbm)
                 if start_index < list_len && start_index <= final_end_index {
                     for i in start_index..=final_end_index {
                         result_list.push(RedisType::bulk_string(&list_value[i as usize]));
@@ -144,7 +135,7 @@ mod tests {
         let lists = Arc::new(Mutex::new(HashMap::new()));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
         let command = RedisCommand::RPUSH(
-            RedisType::bulk_string("mylist"),
+            "mylist".to_string(),
             vec!["one".to_string(), "two".to_string()],
         );
 
@@ -166,7 +157,7 @@ mod tests {
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
         let command = RedisCommand::RPUSH(
-            RedisType::bulk_string("mylist"),
+            "mylist".to_string(),
             vec!["one".to_string(), "two".to_string()],
         );
 

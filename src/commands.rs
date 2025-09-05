@@ -7,15 +7,11 @@ use crate::types::RedisType;
 
 #[derive(Debug, PartialEq)]
 pub struct RedisKeyValue {
-    value: String,
+    pub value: String,
     expired_at_millis: Option<u128>,
 }
 
 impl RedisKeyValue {
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-
     pub fn is_expired(&self) -> bool {
         if let Some(val) = self.expired_at_millis {
             return val <= now_millis();
@@ -52,12 +48,12 @@ impl RedisKeyValue {
 
 #[derive(Debug, PartialEq)]
 pub enum RedisCommand {
-    GET(RedisType),
-    SET(RedisType, RedisKeyValue),
+    GET(String),
+    SET(String, RedisKeyValue),
     PING,
-    ECHO(RedisType),
-    RPUSH(RedisType, Vec<String>),
-    LRANGE(String, i64, i64)
+    ECHO(String),
+    RPUSH(String, Vec<String>),
+    LRANGE(String, i64, i64),
 }
 
 impl RedisCommand {
@@ -82,35 +78,80 @@ impl RedisCommand {
                                 }
                                 "ECHO" => {
                                     if let Some(s) = args.next() {
-                                        commands.push(RedisCommand::ECHO(s));
+                                        match s {
+                                            RedisType::BulkString(bs) => {
+                                                commands.push(RedisCommand::ECHO(
+                                                    String::from_utf8(bs).unwrap(),
+                                                ));
+                                            }
+                                            RedisType::SimpleString(ss) => {
+                                                commands.push(RedisCommand::ECHO(ss));
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                                 "GET" => {
                                     if let Some(s) = args.next() {
-                                        commands.push(RedisCommand::GET(s));
+                                        match s {
+                                            RedisType::BulkString(bs) => {
+                                                commands.push(RedisCommand::GET(
+                                                    String::from_utf8(bs).unwrap(),
+                                                ));
+                                            }
+                                            RedisType::SimpleString(ss) => {
+                                                commands.push(RedisCommand::GET(ss));
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                                 "SET" => {
                                     if let Some(key) = args.next() {
-                                        let key_value = RedisKeyValue::parse(args)
-                                            .expect("Erro ao fazer parse do valor e das configs");
-                                        commands.push(RedisCommand::SET(key, key_value));
+                                        match key {
+                                            RedisType::BulkString(bs) => {
+                                                let key_value = RedisKeyValue::parse(args).expect(
+                                                    "Erro ao fazer parse do valor e das configs",
+                                                );
+                                                commands.push(RedisCommand::SET(
+                                                    String::from_utf8(bs).unwrap(),
+                                                    key_value,
+                                                ));
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                                 "RPUSH" => {
                                     let mut list: Vec<String> = Vec::new();
                                     if let Some(key) = args.next() {
-                                        while let Some(value) = args.next() {
-                                            list.push(value.to_string());
+                                        match key {
+                                            RedisType::BulkString(bs) => {
+                                                while let Some(value) = args.next() {
+                                                    list.push(value.to_string());
+                                                }
+                                                commands.push(RedisCommand::RPUSH(
+                                                    String::from_utf8(bs).unwrap(),
+                                                    list,
+                                                ))
+                                            }
+                                            _ => {}
                                         }
-                                        commands.push(RedisCommand::RPUSH(key, list))
                                     }
-                                },
+                                }
                                 "LRANGE" => {
-                                    if let (Some(key), Some(start), Some(end)) = (args.next(), args.next(), args.next()) {
-                                        let start_value: i64 = start.to_string().parse().expect("Expected a integer");
-                                        let end_value: i64 = end.to_string().parse().expect("Expected a integer");
-                                        commands.push(RedisCommand::LRANGE(key.to_string(), start_value, end_value));
+                                    if let (Some(key), Some(start), Some(end)) =
+                                        (args.next(), args.next(), args.next())
+                                    {
+                                        let start_value: i64 =
+                                            start.to_string().parse().expect("Expected a integer");
+                                        let end_value: i64 =
+                                            end.to_string().parse().expect("Expected a integer");
+                                        commands.push(RedisCommand::LRANGE(
+                                            key.to_string(),
+                                            start_value,
+                                            end_value,
+                                        ));
                                     }
                                 }
                                 _ => {}
@@ -166,7 +207,7 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["echo", "teste teste"])]);
         assert_eq!(
             result,
-            vec![RedisCommand::ECHO(RedisType::bulk_string("teste teste"))]
+            vec![RedisCommand::ECHO("teste teste".to_string())]
         );
     }
 
@@ -175,7 +216,7 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["get", "test"])]);
         assert_eq!(
             result,
-            vec![RedisCommand::GET(RedisType::bulk_string("test"))]
+            vec![RedisCommand::GET("test".to_string())]
         );
     }
 
@@ -185,7 +226,7 @@ mod tests {
         assert_eq!(
             result,
             vec![RedisCommand::SET(
-                RedisType::bulk_string("test"),
+                "test".to_string(),
                 RedisKeyValue {
                     value: "test".to_string(),
                     expired_at_millis: None
@@ -202,8 +243,8 @@ mod tests {
         assert_eq!(result.len(), 1);
         let command = &result[0];
         if let RedisCommand::SET(key, key_value) = command {
-            assert_eq!(*key, RedisType::bulk_string("key"));
-            assert_eq!(key_value.value(), "value");
+            assert_eq!(*key, "key".to_string());
+            assert_eq!(key_value.value, "value");
             assert!(key_value.expired_at_millis.is_some());
         } else {
             panic!("Expected RedisCommand::Set, but got {:?}", command);
@@ -218,8 +259,8 @@ mod tests {
         assert_eq!(result.len(), 1);
         let command = &result[0];
         if let RedisCommand::SET(key, key_value) = command {
-            assert_eq!(*key, RedisType::bulk_string("key"));
-            assert_eq!(key_value.value(), "value");
+            assert_eq!(*key, "key".to_string());
+            assert_eq!(key_value.value, "value");
             assert!(
                 key_value.expired_at_millis.is_some(),
                 "PX option should be case-insensitive"
@@ -237,7 +278,7 @@ mod tests {
         assert_eq!(
             result,
             vec![RedisCommand::RPUSH(
-                RedisType::bulk_string("mylist"),
+                "mylist".to_string(),
                 vec!["one".to_string(), "two".to_string()]
             )]
         );
