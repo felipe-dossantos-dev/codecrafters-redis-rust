@@ -53,6 +53,7 @@ pub enum RedisCommand {
     PING,
     ECHO(String),
     RPUSH(String, Vec<String>),
+    LPUSH(String, Vec<String>),
     LRANGE(String, i64, i64),
 }
 
@@ -131,6 +132,23 @@ impl RedisCommand {
                                                     list.push(value.to_string());
                                                 }
                                                 commands.push(RedisCommand::RPUSH(
+                                                    String::from_utf8(bs).unwrap(),
+                                                    list,
+                                                ))
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                "LPUSH" => {
+                                    let mut list: Vec<String> = Vec::new();
+                                    if let Some(key) = args.next() {
+                                        match key {
+                                            RedisType::BulkString(bs) => {
+                                                while let Some(value) = args.next() {
+                                                    list.push(value.to_string());
+                                                }
+                                                commands.push(RedisCommand::LPUSH(
                                                     String::from_utf8(bs).unwrap(),
                                                     list,
                                                 ))
@@ -283,4 +301,19 @@ mod tests {
             )]
         );
     }
+
+        #[test]
+    fn test_commands_build_lpush() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "Lpush", "mylist", "one", "two",
+        ])]);
+        assert_eq!(
+            result,
+            vec![RedisCommand::LPUSH(
+                "mylist".to_string(),
+                vec!["one".to_string(), "two".to_string()]
+            )]
+        );
+    }
+
 }
