@@ -109,7 +109,7 @@ impl RedisServer {
                 let key_str = key.to_string();
                 let mut lists_guard = lists.lock().await;
                 let list = lists_guard.entry(key_str).or_insert_with(Vec::new);
-                for value in values.iter().rev() {
+                for value in values.iter() {
                     list.insert(0, value.clone());
                 }
                 let len = list.len() as i64;
@@ -209,7 +209,7 @@ mod tests {
         let lists_guard = lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
-            Some(&vec!["one".to_string(), "two".to_string()])
+            Some(&vec!["two".to_string(), "one".to_string()])
         );
     }
 
@@ -262,8 +262,8 @@ mod tests {
         assert_eq!(
             lists_guard.get("mylist"),
             Some(&vec![
-                "one".to_string(),
                 "two".to_string(),
+                "one".to_string(),
                 "zero".to_string(),
             ])
         );
