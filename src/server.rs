@@ -98,17 +98,15 @@ impl RedisServer {
             RedisCommand::PING => Some(RedisType::pong()),
             RedisCommand::ECHO(value) => Some(RedisType::bulk_string(&value)),
             RedisCommand::RPUSH(key, values) => {
-                let key_str = key.to_string();
                 let mut lists_guard = lists.lock().await;
-                let list = lists_guard.entry(key_str).or_insert_with(Vec::new);
+                let list = lists_guard.entry(key).or_insert_with(Vec::new);
                 list.extend(values);
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
             }
             RedisCommand::LPUSH(key, values) => {
-                let key_str = key.to_string();
                 let mut lists_guard = lists.lock().await;
-                let list = lists_guard.entry(key_str).or_insert_with(Vec::new);
+                let list = lists_guard.entry(key).or_insert_with(Vec::new);
                 for value in values.iter() {
                     list.insert(0, value.clone());
                 }
@@ -151,6 +149,12 @@ impl RedisServer {
                     return Some(RedisType::Array(result_list));
                 }
                 Some(RedisType::Array(vec![]))
+            }
+            RedisCommand::LLEN(key) => {
+                let mut lists_guard = lists.lock().await;
+                let list = lists_guard.entry(key).or_insert_with(Vec::new);
+                let len = list.len() as i64;
+                Some(RedisType::Integer(len))
             }
         }
     }
@@ -420,5 +424,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, RedisType::Array(vec![]));
+    }
+
+    #[tokio::test]
+    async fn test_handle_llen() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert("mylist".to_string(), vec!["one".to_string()]);
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LLEN("mylist".to_string());
+
+        let result = RedisServer::handle_command(command, &pairs, &lists)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            RedisType::Integer(1)
+        );
     }
 }

@@ -55,6 +55,7 @@ pub enum RedisCommand {
     RPUSH(String, Vec<String>),
     LPUSH(String, Vec<String>),
     LRANGE(String, i64, i64),
+    LLEN(String),
 }
 
 impl RedisCommand {
@@ -172,6 +173,21 @@ impl RedisCommand {
                                         ));
                                     }
                                 }
+                                "LLEN" => {
+                                    if let Some(s) = args.next() {
+                                        match s {
+                                            RedisType::BulkString(bs) => {
+                                                commands.push(RedisCommand::LLEN(
+                                                    String::from_utf8(bs).unwrap(),
+                                                ));
+                                            }
+                                            RedisType::SimpleString(ss) => {
+                                                commands.push(RedisCommand::LLEN(ss));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -223,19 +239,13 @@ mod tests {
     #[test]
     fn test_commands_build_echo() {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["echo", "teste teste"])]);
-        assert_eq!(
-            result,
-            vec![RedisCommand::ECHO("teste teste".to_string())]
-        );
+        assert_eq!(result, vec![RedisCommand::ECHO("teste teste".to_string())]);
     }
 
     #[test]
     fn test_commands_build_get() {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["get", "test"])]);
-        assert_eq!(
-            result,
-            vec![RedisCommand::GET("test".to_string())]
-        );
+        assert_eq!(result, vec![RedisCommand::GET("test".to_string())]);
     }
 
     #[test]
@@ -302,7 +312,7 @@ mod tests {
         );
     }
 
-        #[test]
+    #[test]
     fn test_commands_build_lpush() {
         let result = RedisCommand::build(vec![RedisType::new_array(vec![
             "Lpush", "mylist", "one", "two",
@@ -316,4 +326,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_commands_build_llen() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "llen", "mylist"
+        ])]);
+        assert_eq!(
+            result,
+            vec![RedisCommand::LLEN(
+                "mylist".to_string()
+            )]
+        );
+    }
 }
