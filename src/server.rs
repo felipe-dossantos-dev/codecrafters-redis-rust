@@ -162,13 +162,23 @@ impl RedisServer {
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
             }
-            RedisCommand::LPOP(key) => {
+            RedisCommand::LPOP(key, count) => {
                 let mut lists_guard = lists.lock().await;
                 let list = lists_guard.entry(key);
                 match list {
-                    Occupied(mut occupied_entry) => {
-                        if let Some(val) = occupied_entry.get_mut().pop_front() {
-                            return Some(RedisType::bulk_string(val.as_str()))
+                    Occupied(mut occupied_entry) => { 
+                        let mut popped_elements: Vec<RedisType> = Vec::new();
+                        for _i in 0..count {
+                            if let Some(val) = occupied_entry.get_mut().pop_front() {
+                                popped_elements.push(RedisType::bulk_string(val.as_str()));
+                            } else {
+                                break;
+                            }
+                        }
+                        if count == 1 && !popped_elements.is_empty() {
+                            return Some(popped_elements.remove(0));
+                        } else if count > 1 {
+                            return Some(RedisType::Array(popped_elements));
                         }
                         Some(RedisType::Null)
                     }
@@ -307,7 +317,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lrange_empty_list() {
-        let mut initial_list= HashMap::new();
+        let mut initial_list = HashMap::new();
         initial_list.insert("mylist".to_string(), VecDeque::new());
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
@@ -464,18 +474,59 @@ mod tests {
     #[tokio::test]
     async fn test_handle_lpop() {
         let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), VecDeque::from(["one".to_string(), "two".to_string()]));
+        initial_list.insert(
+            "mylist".to_string(),
+            VecDeque::from([
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+            ]),
+        );
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
-        let command = RedisCommand::LPOP("mylist".to_string());
+        let command = RedisCommand::LPOP("mylist".to_string(), 1);
+        let result = RedisServer::handle_command(command, &pairs, &lists)
+            .await
+            .unwrap();
+        assert_eq!(result, RedisType::bulk_string("1"));
+        let lists_guard = lists.lock().await;
+        assert_eq!(
+            lists_guard.get("mylist").unwrap(),
+            &VecDeque::from(["2".to_string(), "3".to_string(), "4".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_lpop_multiple() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert(
+            "mylist".to_string(),
+            VecDeque::from([
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+            ]),
+        );
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LPOP("mylist".to_string(), 2);
 
         let result = RedisServer::handle_command(command, &pairs, &lists)
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::bulk_string("one"));
+        assert_eq!(
+            result,
+            RedisType::Array(vec![RedisType::bulk_string("1"), RedisType::bulk_string("2")])
+        );
         let lists_guard = lists.lock().await;
-        assert_eq!(lists_guard.get("mylist").unwrap(), &VecDeque::from(["two".to_string()]));
+        assert_eq!(
+            lists_guard.get("mylist").unwrap(),
+            &VecDeque::from(["3".to_string(), "4".to_string()])
+        );
     }
 }

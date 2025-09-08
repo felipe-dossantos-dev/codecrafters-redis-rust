@@ -56,7 +56,7 @@ pub enum RedisCommand {
     LPUSH(String, Vec<String>),
     LRANGE(String, i64, i64),
     LLEN(String),
-    LPOP(String)
+    LPOP(String, i64),
 }
 
 impl RedisCommand {
@@ -190,15 +190,23 @@ impl RedisCommand {
                                     }
                                 }
                                 "LPOP" => {
-                                    if let Some(s) = args.next() {
-                                        match s {
+                                    if let Some(key) = args.next() {
+                                        let mut count = 1;
+                                        if let Some(count_arg) = args.next() {
+                                            match count_arg.to_int() {
+                                                Some(v) => count = v,
+                                                None => count = 1
+                                            }
+                                        }
+                                        match key {
                                             RedisType::BulkString(bs) => {
                                                 commands.push(RedisCommand::LPOP(
                                                     String::from_utf8(bs).unwrap(),
+                                                    count,
                                                 ));
                                             }
                                             RedisType::SimpleString(ss) => {
-                                                commands.push(RedisCommand::LPOP(ss));
+                                                commands.push(RedisCommand::LPOP(ss, count));
                                             }
                                             _ => {}
                                         }
@@ -344,27 +352,16 @@ mod tests {
 
     #[test]
     fn test_commands_build_llen() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
-            "llen", "mylist"
-        ])]);
-        assert_eq!(
-            result,
-            vec![RedisCommand::LLEN(
-                "mylist".to_string()
-            )]
-        );
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["llen", "mylist"])]);
+        assert_eq!(result, vec![RedisCommand::LLEN("mylist".to_string())]);
     }
 
     #[test]
     fn test_commands_build_lpop() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
-            "LPOP", "mylist"
-        ])]);
-        assert_eq!(
-            result,
-            vec![RedisCommand::LPOP(
-                "mylist".to_string()
-            )]
-        );
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist"])]);
+        assert_eq!(result, vec![RedisCommand::LPOP("mylist".to_string(), 1)]);
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist", "2"])]);
+        assert_eq!(result, vec![RedisCommand::LPOP("mylist".to_string(), 2)]);
     }
 }
