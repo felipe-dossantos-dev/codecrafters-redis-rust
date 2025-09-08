@@ -56,6 +56,7 @@ pub enum RedisCommand {
     LPUSH(String, Vec<String>),
     LRANGE(String, i64, i64),
     LLEN(String),
+    LPOP(String)
 }
 
 impl RedisCommand {
@@ -183,6 +184,21 @@ impl RedisCommand {
                                             }
                                             RedisType::SimpleString(ss) => {
                                                 commands.push(RedisCommand::LLEN(ss));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                "LPOP" => {
+                                    if let Some(s) = args.next() {
+                                        match s {
+                                            RedisType::BulkString(bs) => {
+                                                commands.push(RedisCommand::LPOP(
+                                                    String::from_utf8(bs).unwrap(),
+                                                ));
+                                            }
+                                            RedisType::SimpleString(ss) => {
+                                                commands.push(RedisCommand::LPOP(ss));
                                             }
                                             _ => {}
                                         }
@@ -334,6 +350,19 @@ mod tests {
         assert_eq!(
             result,
             vec![RedisCommand::LLEN(
+                "mylist".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn test_commands_build_lpop() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "LPOP", "mylist"
+        ])]);
+        assert_eq!(
+            result,
+            vec![RedisCommand::LPOP(
                 "mylist".to_string()
             )]
         );

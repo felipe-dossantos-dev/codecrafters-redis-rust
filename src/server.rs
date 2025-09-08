@@ -1,5 +1,10 @@
-
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{
+        hash_map::Entry::{Occupied, Vacant},
+        HashMap, VecDeque,
+    },
+    sync::Arc,
+};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result},
@@ -15,7 +20,7 @@ use crate::{
 pub struct RedisServer {
     listener: TcpListener,
     pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>>,
-    lists: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    lists: Arc<Mutex<HashMap<String, VecDeque<String>>>>,
 }
 
 impl RedisServer {
@@ -52,7 +57,7 @@ impl RedisServer {
     async fn client_process(
         mut stream: TcpStream,
         pairs: Arc<Mutex<HashMap<String, RedisKeyValue>>>,
-        lists: Arc<Mutex<HashMap<String, Vec<String>>>>,
+        lists: Arc<Mutex<HashMap<String, VecDeque<String>>>>,
     ) {
         let mut buf = [0; 512];
 
@@ -64,7 +69,8 @@ impl RedisServer {
                     let received_commands = RedisCommand::parse(request);
 
                     for command in received_commands {
-                        if let Some(response) = Self::handle_command(command, &pairs, &lists).await {
+                        if let Some(response) = Self::handle_command(command, &pairs, &lists).await
+                        {
                             println!("Response Generated: {:?}", response);
                             Self::write_stream(&mut stream, &response).await;
                         }
@@ -81,7 +87,7 @@ impl RedisServer {
     async fn handle_command(
         command: RedisCommand,
         pairs: &Arc<Mutex<HashMap<String, RedisKeyValue>>>,
-        lists: &Arc<Mutex<HashMap<String, Vec<String>>>>,
+        lists: &Arc<Mutex<HashMap<String, VecDeque<String>>>>,
     ) -> Option<RedisType> {
         match command {
             RedisCommand::GET(key) => {
@@ -99,14 +105,14 @@ impl RedisServer {
             RedisCommand::ECHO(value) => Some(RedisType::bulk_string(&value)),
             RedisCommand::RPUSH(key, values) => {
                 let mut lists_guard = lists.lock().await;
-                let list = lists_guard.entry(key).or_insert_with(Vec::new);
+                let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 list.extend(values);
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
             }
             RedisCommand::LPUSH(key, values) => {
                 let mut lists_guard = lists.lock().await;
-                let list = lists_guard.entry(key).or_insert_with(Vec::new);
+                let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 for value in values.iter() {
                     list.insert(0, value.clone());
                 }
@@ -152,9 +158,22 @@ impl RedisServer {
             }
             RedisCommand::LLEN(key) => {
                 let mut lists_guard = lists.lock().await;
-                let list = lists_guard.entry(key).or_insert_with(Vec::new);
+                let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
+            }
+            RedisCommand::LPOP(key) => {
+                let mut lists_guard = lists.lock().await;
+                let list = lists_guard.entry(key);
+                match list {
+                    Occupied(mut occupied_entry) => {
+                        if let Some(val) = occupied_entry.get_mut().pop_front() {
+                            return Some(RedisType::bulk_string(val.as_str()))
+                        }
+                        Some(RedisType::Null)
+                    }
+                    Vacant(_) => Some(RedisType::Null),
+                }
             }
         }
     }
@@ -192,7 +211,7 @@ mod tests {
         let lists_guard = lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
-            Some(&vec!["one".to_string(), "two".to_string()])
+            Some(&VecDeque::from(vec!["one".to_string(), "two".to_string()]))
         );
     }
 
@@ -213,14 +232,14 @@ mod tests {
         let lists_guard = lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
-            Some(&vec!["two".to_string(), "one".to_string()])
+            Some(&VecDeque::from(["two".to_string(), "one".to_string()]))
         );
     }
 
     #[tokio::test]
     async fn test_handle_rpush_existing_list() {
         let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), vec!["zero".to_string()]);
+        initial_list.insert("mylist".to_string(), VecDeque::from(["zero".to_string()]));
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
@@ -237,18 +256,18 @@ mod tests {
         let lists_guard = lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
-            Some(&vec![
+            Some(&VecDeque::from([
                 "zero".to_string(),
                 "one".to_string(),
                 "two".to_string()
-            ])
+            ]))
         );
     }
 
     #[tokio::test]
     async fn test_handle_lpush_existing_list() {
         let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), vec!["zero".to_string()]);
+        initial_list.insert("mylist".to_string(), VecDeque::from(["zero".to_string()]));
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
@@ -265,11 +284,11 @@ mod tests {
         let lists_guard = lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
-            Some(&vec![
+            Some(&VecDeque::from([
                 "two".to_string(),
                 "one".to_string(),
                 "zero".to_string(),
-            ])
+            ]))
         );
     }
 
@@ -288,8 +307,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lrange_empty_list() {
-        let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), vec![]);
+        let mut initial_list= HashMap::new();
+        initial_list.insert("mylist".to_string(), VecDeque::new());
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
@@ -307,7 +326,7 @@ mod tests {
         let mut initial_list = HashMap::new();
         initial_list.insert(
             "mylist".to_string(),
-            vec!["one".to_string(), "two".to_string(), "three".to_string()],
+            VecDeque::from(["one".to_string(), "two".to_string(), "three".to_string()]),
         );
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
@@ -333,13 +352,13 @@ mod tests {
         let mut initial_list = HashMap::new();
         initial_list.insert(
             "mylist".to_string(),
-            vec![
+            VecDeque::from([
                 "a".to_string(),
                 "b".to_string(),
                 "c".to_string(),
                 "d".to_string(),
                 "e".to_string(),
-            ],
+            ]),
         );
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
@@ -394,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_lrange_end_out_of_bounds() {
         let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), vec!["one".to_string()]);
+        initial_list.insert("mylist".to_string(), VecDeque::from(["one".to_string()]));
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
@@ -413,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_lrange_start_out_of_bounds() {
         let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), vec!["one".to_string()]);
+        initial_list.insert("mylist".to_string(), VecDeque::from(["one".to_string()]));
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
@@ -429,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_llen() {
         let mut initial_list = HashMap::new();
-        initial_list.insert("mylist".to_string(), vec!["one".to_string()]);
+        initial_list.insert("mylist".to_string(), VecDeque::from(["one".to_string()]));
         let lists = Arc::new(Mutex::new(initial_list));
         let pairs = Arc::new(Mutex::new(HashMap::new()));
 
@@ -439,9 +458,24 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            result,
-            RedisType::Integer(1)
-        );
+        assert_eq!(result, RedisType::Integer(1));
+    }
+
+    #[tokio::test]
+    async fn test_handle_lpop() {
+        let mut initial_list = HashMap::new();
+        initial_list.insert("mylist".to_string(), VecDeque::from(["one".to_string(), "two".to_string()]));
+        let lists = Arc::new(Mutex::new(initial_list));
+        let pairs = Arc::new(Mutex::new(HashMap::new()));
+
+        let command = RedisCommand::LPOP("mylist".to_string());
+
+        let result = RedisServer::handle_command(command, &pairs, &lists)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::bulk_string("one"));
+        let lists_guard = lists.lock().await;
+        assert_eq!(lists_guard.get("mylist").unwrap(), &VecDeque::from(["two".to_string()]));
     }
 }
