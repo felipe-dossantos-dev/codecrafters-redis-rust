@@ -185,6 +185,7 @@ impl RedisServer {
                     Vacant(_) => Some(RedisType::Null),
                 }
             }
+            RedisCommand::BLPOP(_,_) => todo!()
         }
     }
 

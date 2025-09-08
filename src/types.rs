@@ -92,6 +92,16 @@ impl RedisType {
         }
     }
 
+    pub fn to_float(&self) -> Option<f64> {
+        match self {
+            RedisType::SimpleString(val) => val.parse().ok(),
+            RedisType::Error(val) => val.parse().ok(),
+            RedisType::Integer(val) => Some(*val as f64),
+            RedisType::BulkString(val) => String::from_utf8(val.to_vec()).unwrap().parse().ok(),
+            _ => None,
+        }
+    }
+
     #[cfg(test)]
     pub fn new_array(values: Vec<&str>) -> RedisType {
         let bulk_string = values.iter().map(|x| Self::bulk_string(x)).collect();

@@ -57,6 +57,7 @@ pub enum RedisCommand {
     LRANGE(String, i64, i64),
     LLEN(String),
     LPOP(String, i64),
+    BLPOP(String, f64)
 }
 
 impl RedisCommand {
@@ -207,6 +208,29 @@ impl RedisCommand {
                                             }
                                             RedisType::SimpleString(ss) => {
                                                 commands.push(RedisCommand::LPOP(ss, count));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                "BLPOP" => {
+                                    if let Some(key) = args.next() {
+                                        let mut timeout = 0.0 as f64;
+                                        if let Some(timeout_arg) = args.next() {
+                                            match timeout_arg.to_float() {
+                                                Some(v) => timeout = v,
+                                                None => timeout = 0.0
+                                            }
+                                        }
+                                        match key {
+                                            RedisType::BulkString(bs) => {
+                                                commands.push(RedisCommand::BLPOP(
+                                                    String::from_utf8(bs).unwrap(),
+                                                    timeout,
+                                                ));
+                                            }
+                                            RedisType::SimpleString(ss) => {
+                                                commands.push(RedisCommand::BLPOP(ss, timeout));
                                             }
                                             _ => {}
                                         }
@@ -363,5 +387,14 @@ mod tests {
 
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist", "2"])]);
         assert_eq!(result, vec![RedisCommand::LPOP("mylist".to_string(), 2)]);
+    }
+
+    #[test]
+    fn test_commands_build_blpop() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist"])]);
+        assert_eq!(result, vec![RedisCommand::BLPOP("mylist".to_string(), 0.0)]);
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist", "2"])]);
+        assert_eq!(result, vec![RedisCommand::BLPOP("mylist".to_string(), 2.0)]);
     }
 }
