@@ -36,10 +36,17 @@ impl RedisRequest {
     pub fn new(command: RedisCommand) -> Self {
         match command {
             RedisCommand::BLPOP(_, timeout) => {
-                return Self {
-                    command: command,
-                    expired_at_millis: Some(utils::now_millis() + (timeout * 1000.0) as u128),
-                };
+                if timeout > 0.0 {
+                    return Self {
+                        command: command,
+                        expired_at_millis: Some(utils::now_millis() + (timeout * 1000.0) as u128),
+                    };
+                } else {
+                    return Self {
+                        command: command,
+                        expired_at_millis: None,
+                    };
+                }
             }
             _ => {
                 return Self {
