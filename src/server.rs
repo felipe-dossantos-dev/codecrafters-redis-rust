@@ -20,6 +20,7 @@ use crate::{
     utils,
 };
 
+#[derive(Debug, PartialEq)]
 pub struct RedisRequest {
     command: RedisCommand,
     expired_at_millis: Option<u128>,
@@ -58,6 +59,7 @@ impl RedisRequest {
     }
 }
 
+#[derive(Debug)]
 struct RedisStore {
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
@@ -74,6 +76,7 @@ impl RedisStore {
     }
 }
 
+#[derive(Debug)]
 pub struct RedisServer {
     addr: String,
     store: Arc<RedisStore>,
@@ -136,6 +139,7 @@ impl RedisServer {
 
             let mut reques = store.reques.lock().await;
             while !reques.is_empty() {
+                println!("reques: {:?}", reques);
                 let request = reques.pop_front().unwrap();
                 if !request.is_expired() {
                     let response = Self::handle_command(request.command, &store).await;
