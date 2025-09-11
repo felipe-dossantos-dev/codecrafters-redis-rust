@@ -139,13 +139,13 @@ impl RedisServer {
 
             let mut reques = store.reques.lock().await;
             while !reques.is_empty() {
-                println!("reques: {:?}", reques);
                 let request = reques.pop_front().unwrap();
                 if !request.is_expired() {
                     println!("reques request: {:?}", request);
                     let response = Self::handle_command(request.command, &store).await;
                     Self::write_stream(&mut stream, &response).await;
                 }
+                println!("reques: {:?}", reques);
             }
         }
     }
@@ -237,7 +237,6 @@ impl RedisServer {
                             store.reques.lock().await.push_back(RedisRequest::new(
                                 RedisCommand::BLPOP(key_clone, timeout),
                             ));
-                            println!("nao deu push");
                             None
                         }
                         val => Some(val),
