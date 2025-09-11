@@ -3,7 +3,7 @@ use std::{
     vec::IntoIter,
 };
 
-use crate::types::RedisType;
+use crate::{types::RedisType, utils};
 
 #[derive(Debug, PartialEq)]
 pub struct RedisKeyValue {
@@ -14,11 +14,12 @@ pub struct RedisKeyValue {
 impl RedisKeyValue {
     pub fn is_expired(&self) -> bool {
         if let Some(val) = self.expired_at_millis {
-            return val <= now_millis();
+            return val <= utils::now_millis();
         }
         false
     }
 
+    // ver se daria para criar um trait com isso e depois gerar as struct
     pub fn parse(mut args: IntoIter<RedisType>) -> Option<Self> {
         let mut expired_at_millis: Option<u128> = None;
 
@@ -31,7 +32,7 @@ impl RedisKeyValue {
                                 .to_string()
                                 .parse()
                                 .expect("Cannot parse the integer value");
-                            expired_at_millis = Some(now_millis() + ttl_value);
+                            expired_at_millis = Some(utils::now_millis() + ttl_value);
                         }
                     }
                     _ => (),
@@ -46,6 +47,15 @@ impl RedisKeyValue {
     }
 }
 
+impl Clone for RedisKeyValue {
+    fn clone(&self) -> Self {
+        RedisKeyValue {
+            value: self.value.clone(),
+            expired_at_millis: self.expired_at_millis.clone(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum RedisCommand {
     GET(String),
@@ -57,12 +67,35 @@ pub enum RedisCommand {
     LRANGE(String, i64, i64),
     LLEN(String),
     LPOP(String, i64),
-    BLPOP(String, f64)
+    BLPOP(String, f64),
+}
+
+impl Clone for RedisCommand {
+    fn clone(&self) -> Self {
+        match self {
+            RedisCommand::GET(key) => RedisCommand::GET(key.clone()),
+            RedisCommand::SET(key, value) => RedisCommand::SET(key.clone(), value.clone()),
+            RedisCommand::PING => RedisCommand::PING,
+            RedisCommand::ECHO(msg) => RedisCommand::ECHO(msg.clone()),
+            RedisCommand::RPUSH(key, values) => RedisCommand::RPUSH(key.clone(), values.clone()),
+            RedisCommand::LPUSH(key, values) => RedisCommand::LPUSH(key.clone(), values.clone()),
+            RedisCommand::LRANGE(key, start, end) => {
+                RedisCommand::LRANGE(key.clone(), *start, *end)
+            }
+            RedisCommand::LLEN(key) => RedisCommand::LLEN(key.clone()),
+            RedisCommand::LPOP(key, count) => RedisCommand::LPOP(key.clone(), count.clone()),
+            RedisCommand::BLPOP(key, timeout) => RedisCommand::BLPOP(key.clone(), timeout.clone()),
+        }
+    }
 }
 
 impl RedisCommand {
     pub fn build(values: Vec<RedisType>) -> Vec<RedisCommand> {
         let mut commands: Vec<RedisCommand> = Vec::new();
+        
+        // TODO: refatorar isso daqui, a interface do metodo boa,
+        // mas seria bom separar em funcoes menores e que talvez fosse reutilizaveis
+        // ou separar por struct para cada comando que nem o RedisKeyValue
 
         for value in values {
             match value {
@@ -73,6 +106,7 @@ impl RedisCommand {
                     if arr.is_empty() {
                         continue;
                     }
+
                     let mut args = arr.into_iter();
                     if let Some(RedisType::BulkString(command_bytes)) = args.next() {
                         if let Ok(command_name) = String::from_utf8(command_bytes) {
@@ -196,7 +230,7 @@ impl RedisCommand {
                                         if let Some(count_arg) = args.next() {
                                             match count_arg.to_int() {
                                                 Some(v) => count = v,
-                                                None => count = 1
+                                                None => count = 1,
                                             }
                                         }
                                         match key {
@@ -219,7 +253,7 @@ impl RedisCommand {
                                         if let Some(timeout_arg) = args.next() {
                                             match timeout_arg.to_float() {
                                                 Some(v) => timeout = v,
-                                                None => timeout = 0.0
+                                                None => timeout = 0.0,
                                             }
                                         }
                                         match key {
@@ -262,13 +296,6 @@ impl RedisCommand {
 
         return received_commands;
     }
-}
-
-fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Problem with time!")
-        .as_millis()
 }
 
 #[cfg(test)]

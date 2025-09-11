@@ -2,6 +2,7 @@
 mod commands;
 mod types;
 mod server;
+mod utils;
 
 use server::RedisServer;
 use tokio::io::Result;
@@ -9,7 +10,7 @@ use tokio::io::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let server = RedisServer::new("127.0.0.1:6379").await?;
+    let server = RedisServer::new(String::from("127.0.0.1:6379"));
     server.run().await;
     Ok(())
 }
