@@ -137,15 +137,18 @@ impl RedisServer {
                 }
             }
 
-            let mut reques = store.reques.lock().await;
-            while !reques.is_empty() {
+            loop {
+                let mut reques = store.reques.lock().await;
+                if reques.is_empty() {
+                    break;
+                }
+
                 let request = reques.pop_front().unwrap();
                 if !request.is_expired() {
                     println!("reques request: {:?}", request);
                     let response = Self::handle_command(request.command, &store).await;
                     Self::write_stream(&mut stream, &response).await;
                 }
-                println!("reques: {:?}", reques);
             }
         }
     }
