@@ -142,6 +142,7 @@ impl RedisServer {
                 println!("reques: {:?}", reques);
                 let request = reques.pop_front().unwrap();
                 if !request.is_expired() {
+                    println!("reques request: {:?}", request);
                     let response = Self::handle_command(request.command, &store).await;
                     Self::write_stream(&mut stream, &response).await;
                 }
