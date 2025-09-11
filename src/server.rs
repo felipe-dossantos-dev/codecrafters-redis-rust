@@ -234,6 +234,7 @@ impl RedisServer {
                 match lpop {
                     Some(value) => match value {
                         RedisType::Null => {
+                            println!("blpop: {:?}", value);
                             store.reques.lock().await.push_back(RedisRequest::new(
                                 RedisCommand::BLPOP(key_clone, timeout),
                             ));
