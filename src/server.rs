@@ -1,17 +1,21 @@
 use std::{
     collections::{
         hash_map::Entry::{Occupied, Vacant},
-        HashMap, VecDeque,
+        HashMap, HashSet, VecDeque,
     },
     future::Future,
+    hash::Hash,
     io,
     sync::Arc,
 };
+
+use nanoid::nanoid;
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result},
     net::{TcpListener, TcpStream},
     sync::{Mutex, Notify},
+    time::Instant,
 };
 
 use crate::{
@@ -24,7 +28,8 @@ use crate::{
 struct RedisStore {
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
-    pub list_notifiers: Mutex<HashMap<String, Arc<Notify>>>,
+    // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
+    pub client_notifiers: Mutex<HashMap<String, Vec<Arc<Notify>>>>,
 }
 
 impl RedisStore {
@@ -32,8 +37,45 @@ impl RedisStore {
         Self {
             pairs: Mutex::new(HashMap::new()),
             lists: Mutex::new(HashMap::new()),
-            list_notifiers: Mutex::new(HashMap::new()),
+            client_notifiers: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RedisClient<T> {
+    pub id: String,
+    pub created_at: Instant,
+    pub notifier: Arc<Notify>,
+    pub tcp_stream: T,
+}
+
+impl<T> PartialEq for RedisClient<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.created_at == other.created_at
+    }
+}
+
+impl<T> Eq for RedisClient<T> {}
+
+impl<T> Hash for RedisClient<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.created_at.hash(state);
+    }
+}
+
+impl<T> RedisClient<T> {
+    pub fn new(tcp_stream: T) -> Self
+    where
+        T: AsyncReadExt + AsyncWriteExt + Unpin + Send,
+    {
+        return Self {
+            id: nanoid!(),
+            created_at: Instant::now(),
+            notifier: Arc::new(Notify::new()),
+            tcp_stream,
+        };
     }
 }
 
@@ -65,8 +107,9 @@ impl RedisServer {
                 Ok((stream, _)) => {
                     println!("accepted new connection");
                     let store_clone = Arc::clone(&self.store);
+                    let client: RedisClient<TcpStream> = RedisClient::new(stream);
                     tokio::spawn(async move {
-                        Self::client_process(stream, store_clone).await;
+                        Self::client_process(client, store_clone).await;
                     });
                 }
                 Err(e) => {
@@ -76,19 +119,22 @@ impl RedisServer {
         }
     }
 
-    async fn client_process(mut stream: TcpStream, store: Arc<RedisStore>) {
+    async fn client_process<T>(mut client: RedisClient<T>, store: Arc<RedisStore>)
+    where
+        T: AsyncReadExt + AsyncWriteExt + Unpin + Send,
+    {
         let mut buf = [0; 512];
 
         loop {
-            match stream.read(&mut buf).await {
+            match client.tcp_stream.read(&mut buf).await {
                 Ok(0) => return,
                 Ok(n) => {
                     let request = buf[0..n].to_vec();
                     let received_commands = RedisCommand::parse(request);
 
                     for command in received_commands {
-                        let response = Self::handle_command(command, &store).await;
-                        Self::write_stream(&mut stream, &response).await;
+                        let response = Self::handle_command(command, &client, &store).await;
+                        Self::write_stream(&mut client.tcp_stream, &response).await;
                         println!("Response Generated: {:?}", response);
                     }
                 }
@@ -100,7 +146,17 @@ impl RedisServer {
         }
     }
 
-    async fn handle_command(command: RedisCommand, store: &Arc<RedisStore>) -> Option<RedisType> {
+    // TODO - essa interface está ruim
+    // pq ela está fazendo muita coisa, como processar o comando e atualizar outros clientes sobre isso
+    // atualiza a store tbm... 
+    // e ela está ruim pq já mudei a interface dela várias vezes
+    async fn handle_command(
+        command: RedisCommand,
+        client: &RedisClient<impl AsyncReadExt + AsyncWriteExt + Unpin + Send>,
+        store: &Arc<RedisStore>,
+    ) -> Option<RedisType>
+    where
+    {
         match command {
             RedisCommand::GET(key) => {
                 let response = match store.pairs.lock().await.get(&key.to_string()) {
@@ -120,13 +176,10 @@ impl RedisServer {
                 let key_clone = key.clone();
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    if let Some(notify) = store
-                        .list_notifiers
-                        .lock()
-                        .await
-                        .remove(&key_clone)
-                    {
-                        notify.notify_waiters();
+                    if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
+                        for client_notifier in clients_notifiers {
+                            client_notifier.notify_waiters();
+                        }
                     }
                 }
                 list.extend(values);
@@ -138,8 +191,10 @@ impl RedisServer {
                 let key_clone = key.clone();
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    if let Some(notify) = store.list_notifiers.lock().await.remove(&key_clone) {
-                        notify.notify_waiters();
+                    if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
+                        for client_notifier in clients_notifiers {
+                            client_notifier.notify_waiters();
+                        }
                     }
                 }
                 for value in values.iter() {
@@ -207,31 +262,38 @@ impl RedisServer {
                         return Some(RedisType::Null);
                     }
 
-                    let notifier = {
-                        let mut notifiers = store.list_notifiers.lock().await;
-                        notifiers
-                            .entry(key.clone())
-                            .or_insert_with(|| Arc::new(Notify::new()))
-                            .clone()
-                    };
+                    let client_notifier_clone = Arc::clone(&client.notifier);
+
+                    let mut notifiers = store.client_notifiers.lock().await;
+                    notifiers
+                        .entry(key.clone())
+                        .or_insert_with(|| Vec::new())
+                        .push(client_notifier_clone);
 
                     if timeout > 0.0 {
                         let remaining_timeout = std::time::Duration::from_millis(
                             (timeout * 1000.0) as u64 - elapsed as u64,
                         );
                         tokio::select! {
-                            _ = notifier.notified() => {},
+                            _ = client.notifier.notified() => {},
                             _ = tokio::time::sleep(remaining_timeout) => return Some(RedisType::Null),
                         }
                     } else {
-                        notifier.notified().await;
+                        client.notifier.notified().await;
+                    }
+
+                    if let Some(vec) = notifiers.get_mut(&key) {
+                        vec.retain(|n| !Arc::ptr_eq(n, &client.notifier));
                     }
                 }
             }
         }
     }
 
-    async fn write_stream(stream: &mut TcpStream, value: &Option<RedisType>) {
+    async fn write_stream<T>(stream: &mut T, value: &Option<RedisType>)
+    where
+        T: AsyncWriteExt + Unpin,
+    {
         if let Some(val) = value {
             if stream.write_all(&val.serialize()).await.is_err() {
                 eprintln!("error writing to stream");
@@ -270,22 +332,33 @@ async fn lpop(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use tokio::io::DuplexStream;
+    use tokio::sync::Mutex;
+
     use super::*;
     use crate::commands::RedisCommand;
     use crate::types::RedisType;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+
+    fn new_client_for_test() -> (RedisClient<DuplexStream>, DuplexStream) {
+        let (client_stream, server_stream) = tokio::io::duplex(1024);
+        (RedisClient::new(client_stream), server_stream)
+    }
 
     #[tokio::test]
     async fn test_handle_rpush_new_list() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let command = RedisCommand::RPUSH(
             "mylist".to_string(),
             vec!["one".to_string(), "two".to_string()],
         );
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Integer(2));
         let lists_guard = store.lists.lock().await;
@@ -297,13 +370,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lpush_new_list() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let command = RedisCommand::LPUSH(
             "mylist".to_string(),
             vec!["one".to_string(), "two".to_string()],
         );
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Integer(2));
         let lists_guard = store.lists.lock().await;
@@ -315,6 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_rpush_existing_list() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
             .lists
@@ -327,7 +404,9 @@ mod tests {
             vec!["one".to_string(), "two".to_string()],
         );
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Integer(3));
         let lists_guard = store.lists.lock().await;
@@ -343,6 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lpush_existing_list() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
             .lists
@@ -355,7 +435,9 @@ mod tests {
             vec!["one".to_string(), "two".to_string()],
         );
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Integer(3));
         let lists_guard = store.lists.lock().await;
@@ -371,16 +453,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lrange_non_existent_key() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let command = RedisCommand::LRANGE("no-such-list".to_string(), 0, 1);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Array(vec![]));
     }
 
     #[tokio::test]
     async fn test_handle_lrange_empty_list() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
             .lists
@@ -390,13 +476,16 @@ mod tests {
 
         let command = RedisCommand::LRANGE("mylist".to_string(), 0, 1);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Array(vec![]));
     }
 
     #[tokio::test]
     async fn test_handle_lrange_full_range() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store.lists.lock().await.insert(
             "mylist".to_string(),
@@ -405,7 +494,9 @@ mod tests {
 
         let command = RedisCommand::LRANGE("mylist".to_string(), 0, 2);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -419,6 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lrange_negative_range() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store.lists.lock().await.insert(
             "mylist".to_string(),
@@ -432,7 +524,9 @@ mod tests {
         );
         let command = RedisCommand::LRANGE("mylist".to_string(), -2, -1);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -444,7 +538,9 @@ mod tests {
 
         let command = RedisCommand::LRANGE("mylist".to_string(), 0, -3);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -457,7 +553,9 @@ mod tests {
 
         let command = RedisCommand::LRANGE("mylist".to_string(), -6, -1);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -473,6 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lrange_end_out_of_bounds() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
             .lists
@@ -482,7 +581,9 @@ mod tests {
 
         let command = RedisCommand::LRANGE("mylist".to_string(), 0, 10);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
@@ -492,6 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lrange_start_out_of_bounds() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
             .lists
@@ -501,13 +603,16 @@ mod tests {
 
         let command = RedisCommand::LRANGE("mylist".to_string(), 5, 10);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Array(vec![]));
     }
 
     #[tokio::test]
     async fn test_handle_llen() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
             .lists
@@ -517,13 +622,16 @@ mod tests {
 
         let command = RedisCommand::LLEN("mylist".to_string());
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(result, RedisType::Integer(1));
     }
 
     #[tokio::test]
     async fn test_handle_lpop() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store.lists.lock().await.insert(
             "mylist".to_string(),
@@ -536,7 +644,9 @@ mod tests {
         );
 
         let command = RedisCommand::LPOP("mylist".to_string(), 1);
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
         assert_eq!(result, RedisType::bulk_string("1"));
         let lists_guard = store.lists.lock().await;
         assert_eq!(
@@ -547,6 +657,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_lpop_multiple() {
+        let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store.lists.lock().await.insert(
             "mylist".to_string(),
@@ -559,7 +670,9 @@ mod tests {
         );
         let command = RedisCommand::LPOP("mylist".to_string(), 2);
 
-        let result = RedisServer::handle_command(command, &store).await.unwrap();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
 
         assert_eq!(
             result,
