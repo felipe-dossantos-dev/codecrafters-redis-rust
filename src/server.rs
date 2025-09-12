@@ -262,13 +262,14 @@ impl RedisServer {
                         return Some(RedisType::Null);
                     }
 
-                    let client_notifier_clone = Arc::clone(&client.notifier);
-
-                    let mut notifiers = store.client_notifiers.lock().await;
-                    notifiers
-                        .entry(key.clone())
-                        .or_insert_with(|| Vec::new())
-                        .push(client_notifier_clone);
+                    {
+                        let client_notifier_clone = Arc::clone(&client.notifier);
+                        let mut notifiers = store.client_notifiers.lock().await;
+                        notifiers
+                            .entry(key.clone())
+                            .or_insert_with(Vec::new)
+                            .push(client_notifier_clone);
+                    }
 
                     if timeout > 0.0 {
                         let remaining_timeout = std::time::Duration::from_millis(
@@ -282,7 +283,7 @@ impl RedisServer {
                         client.notifier.notified().await;
                     }
 
-                    if let Some(vec) = notifiers.get_mut(&key) {
+                    if let Some(vec) = store.client_notifiers.lock().await.get_mut(&key) {
                         vec.retain(|n| !Arc::ptr_eq(n, &client.notifier));
                     }
                 }
