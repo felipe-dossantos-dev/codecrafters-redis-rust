@@ -135,7 +135,7 @@ impl RedisServer {
                     for command in received_commands {
                         let response = Self::handle_command(command, &client, &store).await;
                         Self::write_stream(&mut client.tcp_stream, &response).await;
-                        println!("Response Generated: {:?}", response);
+                        println!("Response Generated for client:{:?} {:?}",client.id, response);
                     }
                 }
                 Err(e) => {
@@ -177,6 +177,7 @@ impl RedisServer {
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 if list.is_empty() {
                     if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
+                        println!("notifiers={:?}", clients_notifiers);
                         for client_notifier in clients_notifiers {
                             client_notifier.notify_waiters();
                         }
@@ -192,6 +193,7 @@ impl RedisServer {
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 if list.is_empty() {
                     if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
+                        println!("notifiers={:?}", clients_notifiers);
                         for client_notifier in clients_notifiers {
                             client_notifier.notify_waiters();
                         }
@@ -269,6 +271,7 @@ impl RedisServer {
                             .entry(key.clone())
                             .or_insert_with(Vec::new)
                             .push(client_notifier_clone);
+                        println!("notifiers={:?}", notifiers);
                     }
 
                     if timeout > 0.0 {
@@ -284,6 +287,7 @@ impl RedisServer {
                     }
 
                     if let Some(vec) = store.client_notifiers.lock().await.get_mut(&key) {
+                        println!("notifiers={:?}", vec);
                         vec.retain(|n| !Arc::ptr_eq(n, &client.notifier));
                     }
                 }
