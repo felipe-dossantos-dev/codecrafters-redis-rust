@@ -11,7 +11,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result},
     net::{TcpListener, TcpStream},
-    sync::Mutex,
+    sync::{Mutex, Notify},
 };
 
 use crate::{
@@ -20,50 +20,11 @@ use crate::{
     utils,
 };
 
-#[derive(Debug, PartialEq)]
-pub struct RedisRequest {
-    command: RedisCommand,
-    expired_at_millis: Option<u128>,
-}
-
-impl RedisRequest {
-    pub fn is_expired(&self) -> bool {
-        if let Some(val) = self.expired_at_millis {
-            return utils::now_millis() > val;
-        }
-        false
-    }
-
-    pub fn new(command: RedisCommand) -> Self {
-        match command {
-            RedisCommand::BLPOP(_, timeout) => {
-                if timeout > 0.0 {
-                    return Self {
-                        command: command,
-                        expired_at_millis: Some(utils::now_millis() + (timeout * 1000.0) as u128),
-                    };
-                } else {
-                    return Self {
-                        command: command,
-                        expired_at_millis: None,
-                    };
-                }
-            }
-            _ => {
-                return Self {
-                    command,
-                    expired_at_millis: None,
-                };
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RedisStore {
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
-    pub reques: Mutex<VecDeque<RedisRequest>>,
+    pub list_notifiers: Mutex<HashMap<String, Arc<Notify>>>,
 }
 
 impl RedisStore {
@@ -71,7 +32,7 @@ impl RedisStore {
         Self {
             pairs: Mutex::new(HashMap::new()),
             lists: Mutex::new(HashMap::new()),
-            reques: Mutex::new(VecDeque::new()),
+            list_notifiers: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -136,20 +97,6 @@ impl RedisServer {
                     return;
                 }
             }
-
-            loop {
-                let mut reques = store.reques.lock().await;
-                if reques.is_empty() {
-                    break;
-                }
-
-                let request = reques.pop_front().unwrap();
-                if !request.is_expired() {
-                    println!("reques request: {:?}", request);
-                    let response = Self::handle_command(request.command, &store).await;
-                    Self::write_stream(&mut stream, &response).await;
-                }
-            }
         }
     }
 
@@ -170,14 +117,31 @@ impl RedisServer {
             RedisCommand::ECHO(value) => Some(RedisType::bulk_string(&value)),
             RedisCommand::RPUSH(key, values) => {
                 let mut lists_guard = store.lists.lock().await;
+                let key_clone = key.clone();
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
+                if list.is_empty() {
+                    if let Some(notify) = store
+                        .list_notifiers
+                        .lock()
+                        .await
+                        .remove(&key_clone)
+                    {
+                        notify.notify_waiters();
+                    }
+                }
                 list.extend(values);
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
             }
             RedisCommand::LPUSH(key, values) => {
                 let mut lists_guard = store.lists.lock().await;
+                let key_clone = key.clone();
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
+                if list.is_empty() {
+                    if let Some(notify) = store.list_notifiers.lock().await.remove(&key_clone) {
+                        notify.notify_waiters();
+                    }
+                }
                 for value in values.iter() {
                     list.insert(0, value.clone());
                 }
@@ -229,22 +193,37 @@ impl RedisServer {
             }
             RedisCommand::LPOP(key, count) => lpop(&store.lists, key, count).await,
             RedisCommand::BLPOP(key, timeout) => {
-                // TODO - criar uma classe request
-                // TODO - refatorar a parte dos comandos separadamente e tbm para não ficar passando as listas para lá e para cá
-                //      - cria algo com o nome de store
-                let key_clone = key.clone();
-                let lpop = lpop(&store.lists, key, 1).await;
-                match lpop {
-                    Some(value) => match value {
-                        RedisType::Null => {
-                            store.reques.lock().await.push_back(RedisRequest::new(
-                                RedisCommand::BLPOP(key_clone, timeout),
-                            ));
-                            None
+                let start_time = utils::now_millis();
+                loop {
+                    let lpop_result = lpop(&store.lists, key.clone(), 1).await;
+                    if !matches!(lpop_result, Some(RedisType::Null)) {
+                        return lpop_result;
+                    }
+
+                    let elapsed = utils::now_millis() - start_time;
+                    if timeout > 0.0 && elapsed >= (timeout * 1000.0) as u128 {
+                        return Some(RedisType::Null);
+                    }
+
+                    let notifier = {
+                        let mut notifiers = store.list_notifiers.lock().await;
+                        notifiers
+                            .entry(key.clone())
+                            .or_insert_with(|| Arc::new(Notify::new()))
+                            .clone()
+                    };
+
+                    if timeout > 0.0 {
+                        let remaining_timeout = std::time::Duration::from_millis(
+                            (timeout * 1000.0) as u64 - elapsed as u64,
+                        );
+                        tokio::select! {
+                            _ = notifier.notified() => {},
+                            _ = tokio::time::sleep(remaining_timeout) => return Some(RedisType::Null),
                         }
-                        val => Some(val),
-                    },
-                    None => None,
+                    } else {
+                        notifier.notified().await;
+                    }
                 }
             }
         }
