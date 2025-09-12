@@ -179,7 +179,7 @@ impl RedisServer {
                     if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
                         println!("notifiers={:?}", clients_notifiers);
                         for client_notifier in clients_notifiers {
-                            client_notifier.notify_waiters();
+                            client_notifier.notify_one();
                         }
                     }
                 }
@@ -195,7 +195,7 @@ impl RedisServer {
                     if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
                         println!("notifiers={:?}", clients_notifiers);
                         for client_notifier in clients_notifiers {
-                            client_notifier.notify_waiters();
+                            client_notifier.notify_one();
                         }
                     }
                 }
