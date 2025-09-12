@@ -197,7 +197,9 @@ impl RedisServer {
                 loop {
                     let lpop_result = lpop(&store.lists, key.clone(), 1).await;
                     if !matches!(lpop_result, Some(RedisType::Null)) {
-                        return lpop_result;
+                        return lpop_result.map(|val| {
+                            RedisType::Array(vec![RedisType::bulk_string(key.as_str()), val])
+                        });
                     }
 
                     let elapsed = utils::now_millis() - start_time;

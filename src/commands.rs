@@ -121,7 +121,7 @@ impl RedisCommand {
                                                 commands.push(RedisCommand::ECHO(
                                                     String::from_utf8(bs).unwrap(),
                                                 ));
-                                            }
+                                            } 
                                             RedisType::SimpleString(ss) => {
                                                 commands.push(RedisCommand::ECHO(ss));
                                             }
