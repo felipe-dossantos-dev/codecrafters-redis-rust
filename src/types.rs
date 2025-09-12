@@ -12,6 +12,7 @@ pub enum RedisType {
     Integer(i64),
     BulkString(Vec<u8>),
     Array(Vec<RedisType>),
+    NullArray,
     Null,
 }
 
@@ -41,6 +42,9 @@ impl RedisType {
                     result.extend(elem.serialize());
                 }
                 result
+            }
+            RedisType::NullArray => {
+                format!("{}-1{}", SYMBOL_ARRAY, SYMBOL_END_COMMAND).into_bytes()
             }
             _ => format!("{}-1{}", SYMBOL_BULK_STRING, SYMBOL_END_COMMAND).into_bytes(),
         }

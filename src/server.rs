@@ -261,7 +261,7 @@ impl RedisServer {
 
                     let elapsed = utils::now_millis() - start_time;
                     if timeout > 0.0 && elapsed >= (timeout * 1000.0) as u128 {
-                        return Some(RedisType::Null);
+                        return Some(RedisType::NullArray);
                     }
 
                     {
@@ -271,7 +271,6 @@ impl RedisServer {
                             .entry(key.clone())
                             .or_insert_with(Vec::new)
                             .push(client_notifier_clone);
-                        println!("notifiers={:?}", notifiers);
                     }
 
                     if timeout > 0.0 {
@@ -280,14 +279,13 @@ impl RedisServer {
                         );
                         tokio::select! {
                             _ = client.notifier.notified() => {},
-                            _ = tokio::time::sleep(remaining_timeout) => return Some(RedisType::Null),
+                            _ = tokio::time::sleep(remaining_timeout) => return Some(RedisType::NullArray),
                         }
                     } else {
                         client.notifier.notified().await;
                     }
 
                     if let Some(vec) = store.client_notifiers.lock().await.get_mut(&key) {
-                        println!("notifiers={:?}", vec);
                         vec.retain(|n| !Arc::ptr_eq(n, &client.notifier));
                     }
                 }
