@@ -76,13 +76,13 @@ impl RedisType {
         return RedisType::simple_string("PONG");
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string(&self) -> Option<String> {
         match self {
-            RedisType::SimpleString(val) => val.to_string(),
-            RedisType::Error(val) => val.to_string(),
-            RedisType::Integer(val) => format!("{}", val),
-            RedisType::BulkString(val) => String::from_utf8(val.to_vec()).unwrap(),
-            _ => String::new(),
+            RedisType::SimpleString(val) => Some(val.to_string()),
+            RedisType::Error(val) => Some(val.to_string()),
+            RedisType::Integer(val) => Some(format!("{}", val)),
+            RedisType::BulkString(val) => String::from_utf8(val.to_vec()).ok(),
+            _ => None,
         }
     }
 
@@ -293,5 +293,122 @@ mod tests {
                 b"foobar".to_vec()
             )])]
         );
+    }
+
+    #[test]
+    fn test_serialize_null_array() {
+        let result = RedisType::NullArray.serialize();
+        let expected = b"*-1\r\n".to_vec();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_parse_multiple_commands() {
+        let result = RedisType::parse(b"+OK\r\n-Error message\r\n:1000\r\n".to_vec());
+        assert_eq!(
+            result,
+            vec![
+                RedisType::SimpleString("OK".to_string()),
+                RedisType::Error("Error message".to_string()),
+                RedisType::Integer(1000)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_nested_array() {
+        let result = RedisType::parse(b"*2\r\n*1\r\n:1\r\n*2\r\n+hello\r\n-world\r\n".to_vec());
+        assert_eq!(
+            result,
+            vec![RedisType::Array(vec![
+                RedisType::Array(vec![RedisType::Integer(1)]),
+                RedisType::Array(vec![
+                    RedisType::SimpleString("hello".to_string()),
+                    RedisType::Error("world".to_string())
+                ])
+            ])]
+        );
+    }
+
+    #[test]
+    fn test_bulk_string_helper() {
+        let result = RedisType::bulk_string("hello");
+        assert_eq!(result, RedisType::BulkString(b"hello".to_vec()));
+    }
+
+    #[test]
+    fn test_simple_string_helper() {
+        let result = RedisType::simple_string("hello");
+        assert_eq!(result, RedisType::SimpleString("hello".to_string()));
+    }
+
+    #[test]
+    fn test_ok_helper() {
+        let result = RedisType::ok();
+        assert_eq!(result, RedisType::SimpleString("OK".to_string()));
+    }
+
+    #[test]
+    fn test_pong_helper() {
+        let result = RedisType::pong();
+        assert_eq!(result, RedisType::SimpleString("PONG".to_string()));
+    }
+
+    #[test]
+    fn test_to_string() {
+        assert_eq!(
+            RedisType::SimpleString("hello".to_string()).to_string(),
+            Some("hello".to_string())
+        );
+        assert_eq!(
+            RedisType::Error("error".to_string()).to_string(),
+            Some("error".to_string())
+        );
+        assert_eq!(
+            RedisType::Integer(123).to_string(),
+            Some("123".to_string())
+        );
+        assert_eq!(
+            RedisType::BulkString(b"bulk".to_vec()).to_string(),
+            Some("bulk".to_string())
+        );
+        assert_eq!(RedisType::Array(vec![]).to_string(), None);
+        assert_eq!(RedisType::Null.to_string(), None);
+        assert_eq!(RedisType::NullArray.to_string(), None);
+    }
+
+    #[test]
+    fn test_to_int() {
+        assert_eq!(RedisType::SimpleString("123".to_string()).to_int(), Some(123));
+        assert_eq!(RedisType::SimpleString("abc".to_string()).to_int(), None);
+        assert_eq!(RedisType::Error("456".to_string()).to_int(), Some(456));
+        assert_eq!(RedisType::Integer(789).to_int(), Some(789));
+        assert_eq!(RedisType::BulkString(b"101".to_vec()).to_int(), Some(101));
+        assert_eq!(RedisType::BulkString(b"xyz".to_vec()).to_int(), None);
+        assert_eq!(RedisType::Array(vec![]).to_int(), None);
+        assert_eq!(RedisType::Null.to_int(), None);
+        assert_eq!(RedisType::NullArray.to_int(), None);
+    }
+
+    #[test]
+    fn test_to_float() {
+        assert_eq!(
+            RedisType::SimpleString("123.45".to_string()).to_float(),
+            Some(123.45)
+        );
+        assert_eq!(RedisType::SimpleString("abc".to_string()).to_float(), None);
+        assert_eq!(
+            RedisType::Error("456.78".to_string()).to_float(),
+            Some(456.78)
+        );
+        assert_eq!(RedisType::Integer(789).to_float(), Some(789.0));
+        assert_eq!(
+            RedisType::BulkString(b"101.12".to_vec()).to_float(),
+            Some(101.12)
+        );
+        assert_eq!(RedisType::BulkString(b"xyz".to_vec()).to_float(), None);
+        assert_eq!(RedisType::Array(vec![]).to_float(), None);
+        assert_eq!(RedisType::Null.to_float(), None);
+        assert_eq!(RedisType::NullArray.to_float(), None);
     }
 }

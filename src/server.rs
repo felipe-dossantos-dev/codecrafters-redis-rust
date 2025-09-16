@@ -130,12 +130,30 @@ impl RedisServer {
                 Ok(0) => return,
                 Ok(n) => {
                     let request = buf[0..n].to_vec();
-                    let received_commands = RedisCommand::parse(request);
+                    let parsed_commands = RedisCommand::parse(request);
 
-                    for command in received_commands {
-                        let response = Self::handle_command(command, &client, &store).await;
-                        Self::write_stream(&mut client.tcp_stream, &response).await;
-                        println!("Response Generated for client:{:?} {:?}",client.id, response);
+                    match parsed_commands {
+                        Ok(received_commands) => {
+                            for command in received_commands {
+                                let response = Self::handle_command(command, &client, &store).await;
+                                Self::write_stream(&mut client.tcp_stream, &response).await;
+                                println!(
+                                    "Response Generated for client:{:?} {:?}",
+                                    client.id, response
+                                );
+                            }
+                        }
+                        Err(msg) => {
+                            Self::write_stream(
+                                &mut client.tcp_stream,
+                                &Some(RedisType::Error(msg.clone())),
+                            )
+                            .await;
+                            println!(
+                                "Response Generated for client:{:?} {}",
+                                client.id, msg
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -148,15 +166,14 @@ impl RedisServer {
 
     // TODO - essa interface está ruim
     // pq ela está fazendo muita coisa, como processar o comando e atualizar outros clientes sobre isso
-    // atualiza a store tbm... 
+    // atualiza a store tbm...
     // e ela está ruim pq já mudei a interface dela várias vezes
     async fn handle_command(
         command: RedisCommand,
         client: &RedisClient<impl AsyncReadExt + AsyncWriteExt + Unpin + Send>,
         store: &Arc<RedisStore>,
     ) -> Option<RedisType>
-    where
-    {
+where {
         match command {
             RedisCommand::GET(key) => {
                 let response = match store.pairs.lock().await.get(&key.to_string()) {
@@ -176,7 +193,9 @@ impl RedisServer {
                 let key_clone = key.clone();
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
+                    if let Some(clients_notifiers) =
+                        store.client_notifiers.lock().await.get(&key_clone)
+                    {
                         println!("notifiers={:?}", clients_notifiers);
                         for client_notifier in clients_notifiers {
                             client_notifier.notify_one();
@@ -192,7 +211,9 @@ impl RedisServer {
                 let key_clone = key.clone();
                 let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    if let Some(clients_notifiers) = store.client_notifiers.lock().await.get(&key_clone) {
+                    if let Some(clients_notifiers) =
+                        store.client_notifiers.lock().await.get(&key_clone)
+                    {
                         println!("notifiers={:?}", clients_notifiers);
                         for client_notifier in clients_notifiers {
                             client_notifier.notify_one();
@@ -290,6 +311,7 @@ impl RedisServer {
                     }
                 }
             }
+            RedisCommand::ZADD(_, _, _) => todo!(),
         }
     }
 
@@ -343,7 +365,9 @@ mod tests {
 
     use super::*;
     use crate::commands::RedisCommand;
+    use crate::commands::RedisKeyValue;
     use crate::types::RedisType;
+    use crate::utils;
 
     fn new_client_for_test() -> (RedisClient<DuplexStream>, DuplexStream) {
         let (client_stream, server_stream) = tokio::io::duplex(1024);
@@ -688,6 +712,178 @@ mod tests {
         assert_eq!(
             lists_guard.get("mylist").unwrap(),
             &VecDeque::from(["3".to_string(), "4".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_ping() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let command = RedisCommand::PING;
+
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::pong());
+    }
+
+    #[tokio::test]
+    async fn test_handle_echo() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let command = RedisCommand::ECHO("hello world".to_string());
+
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::bulk_string("hello world"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_non_existent_key_in_server() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let get_command = RedisCommand::GET("nonexistent".to_string());
+        let get_result = RedisServer::handle_command(get_command, &client, &store)
+            .await
+            .unwrap();
+        assert_eq!(get_result, RedisType::Null);
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_existing_key() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let key = "mykey".to_string();
+        let value = RedisKeyValue {
+            value: "myvalue".to_string(),
+            expired_at_millis: None,
+        };
+        store.pairs.lock().await.insert(key.clone(), value);
+
+        let command = RedisCommand::GET(key);
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::bulk_string("myvalue"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_expired_key() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let key = "mykey".to_string();
+        let value = RedisKeyValue {
+            value: "myvalue".to_string(),
+            expired_at_millis: Some(utils::now_millis() - 1),
+        };
+        store.pairs.lock().await.insert(key.clone(), value);
+
+        let command = RedisCommand::GET(key);
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::Null);
+    }
+
+    #[tokio::test]
+    async fn test_handle_set() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let key = "mykey".to_string();
+        let value = RedisKeyValue {
+            value: "myvalue".to_string(),
+            expired_at_millis: None,
+        };
+
+        let command = RedisCommand::SET(key.clone(), value);
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::ok());
+        let pairs_guard = store.pairs.lock().await;
+        let stored_value = pairs_guard.get(&key).unwrap();
+        assert_eq!(stored_value.value, "myvalue");
+        assert!(stored_value.expired_at_millis.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_with_px() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let key = "mykey".to_string();
+        let value = RedisKeyValue {
+            value: "myvalue".to_string(),
+            expired_at_millis: Some(utils::now_millis() + 10000),
+        };
+
+        let command = RedisCommand::SET(key.clone(), value);
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(result, RedisType::ok());
+        let pairs_guard = store.pairs.lock().await;
+        let stored_value = pairs_guard.get(&key).unwrap();
+        assert_eq!(stored_value.value, "myvalue");
+        assert!(stored_value.expired_at_millis.is_some()); // Access public field
+    }
+
+    #[tokio::test]
+    async fn test_lpop_non_existent_key() {
+        let lists = Mutex::new(HashMap::new());
+        let result = lpop(&lists, "no-such-key".to_string(), 1).await;
+        assert_eq!(result, Some(RedisType::Null));
+    }
+
+    #[tokio::test]
+    async fn test_lpop_empty_list() {
+        let lists = Mutex::new(HashMap::from([("empty-list".to_string(), VecDeque::new())]));
+        let result = lpop(&lists, "empty-list".to_string(), 1).await;
+        assert_eq!(result, Some(RedisType::Null));
+    }
+
+    #[tokio::test]
+    async fn test_lpop_more_than_exists() {
+        let lists = Mutex::new(HashMap::from([(
+            "mylist".to_string(),
+            VecDeque::from(["one".to_string()]),
+        )]));
+        let result = lpop(&lists, "mylist".to_string(), 2).await;
+        assert_eq!(
+            result,
+            Some(RedisType::Array(vec![RedisType::bulk_string("one")]))
+        );
+        let lists_guard = lists.lock().await;
+        assert!(lists_guard.get("mylist").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_blpop_item_exists() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        store
+            .lists
+            .lock()
+            .await
+            .insert("myblist".to_string(), VecDeque::from(["one".to_string()]));
+
+        let command = RedisCommand::BLPOP("myblist".to_string(), 0.0);
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            RedisType::Array(vec![
+                RedisType::bulk_string("myblist"),
+                RedisType::bulk_string("one")
+            ])
         );
     }
 }
