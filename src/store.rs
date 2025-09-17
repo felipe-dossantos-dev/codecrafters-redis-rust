@@ -35,9 +35,7 @@ impl RedisStore {
 
     pub async fn notify_by_key(&self, key: &String) {
         if let Some(clients_notifiers) = self.client_notifiers.lock().await.get(key) {
-            for client_notifier in clients_notifiers {
-                client_notifier.notify_one();
-            }
+            clients_notifiers.first().map(|f| f.notify_one());
         }
     }
 
