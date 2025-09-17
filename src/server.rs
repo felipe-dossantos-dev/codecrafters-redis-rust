@@ -1,83 +1,25 @@
 use std::{
     collections::{
         hash_map::Entry::{Occupied, Vacant},
-        HashMap, HashSet, VecDeque,
+        HashMap, VecDeque,
     },
-    future::Future,
-    hash::Hash,
-    io,
-    sync::Arc,
+    sync::Arc, time::Duration,
 };
 
-use nanoid::nanoid;
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, Result},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Mutex, Notify},
-    time::Instant,
+    sync::Mutex,
 };
 
 use crate::{
+    client::RedisClient,
     commands::{RedisCommand, RedisKeyValue},
+    store::{RedisStore, WaitResult},
     types::RedisType,
     utils,
 };
-
-#[derive(Debug)]
-struct RedisStore {
-    pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
-    pub lists: Mutex<HashMap<String, VecDeque<String>>>,
-    // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
-    pub client_notifiers: Mutex<HashMap<String, Vec<Arc<Notify>>>>,
-}
-
-impl RedisStore {
-    pub fn new() -> Self {
-        Self {
-            pairs: Mutex::new(HashMap::new()),
-            lists: Mutex::new(HashMap::new()),
-            client_notifiers: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct RedisClient<T> {
-    pub id: String,
-    pub created_at: Instant,
-    pub notifier: Arc<Notify>,
-    pub tcp_stream: T,
-}
-
-impl<T> PartialEq for RedisClient<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.created_at == other.created_at
-    }
-}
-
-impl<T> Eq for RedisClient<T> {}
-
-impl<T> Hash for RedisClient<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-        self.created_at.hash(state);
-    }
-}
-
-impl<T> RedisClient<T> {
-    pub fn new(tcp_stream: T) -> Self
-    where
-        T: AsyncReadExt + AsyncWriteExt + Unpin + Send,
-    {
-        return Self {
-            id: nanoid!(),
-            created_at: Instant::now(),
-            notifier: Arc::new(Notify::new()),
-            tcp_stream,
-        };
-    }
-}
 
 #[derive(Debug)]
 pub struct RedisServer {
@@ -136,7 +78,7 @@ impl RedisServer {
                         Ok(received_commands) => {
                             for command in received_commands {
                                 let response = Self::handle_command(command, &client, &store).await;
-                                Self::write_stream(&mut client.tcp_stream, &response).await;
+                                client.write_response(&response).await;
                                 println!(
                                     "Response Generated for client:{:?} {:?}",
                                     client.id, response
@@ -144,15 +86,10 @@ impl RedisServer {
                             }
                         }
                         Err(msg) => {
-                            Self::write_stream(
-                                &mut client.tcp_stream,
-                                &Some(RedisType::Error(msg.clone())),
-                            )
-                            .await;
-                            println!(
-                                "Response Generated for client:{:?} {}",
-                                client.id, msg
-                            );
+                            client
+                                .write_response(&Some(RedisType::Error(msg.clone())))
+                                .await;
+                            println!("Response Generated for client:{:?} {}", client.id, msg);
                         }
                     }
                 }
@@ -164,16 +101,11 @@ impl RedisServer {
         }
     }
 
-    // TODO - essa interface está ruim
-    // pq ela está fazendo muita coisa, como processar o comando e atualizar outros clientes sobre isso
-    // atualiza a store tbm...
-    // e ela está ruim pq já mudei a interface dela várias vezes
     async fn handle_command(
         command: RedisCommand,
         client: &RedisClient<impl AsyncReadExt + AsyncWriteExt + Unpin + Send>,
         store: &Arc<RedisStore>,
-    ) -> Option<RedisType>
-where {
+    ) -> Option<RedisType> {
         match command {
             RedisCommand::GET(key) => {
                 let response = match store.pairs.lock().await.get(&key.to_string()) {
@@ -190,35 +122,20 @@ where {
             RedisCommand::ECHO(value) => Some(RedisType::bulk_string(&value)),
             RedisCommand::RPUSH(key, values) => {
                 let mut lists_guard = store.lists.lock().await;
-                let key_clone = key.clone();
-                let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
+                let list = lists_guard.entry(key.clone()).or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    if let Some(clients_notifiers) =
-                        store.client_notifiers.lock().await.get(&key_clone)
-                    {
-                        println!("notifiers={:?}", clients_notifiers);
-                        for client_notifier in clients_notifiers {
-                            client_notifier.notify_one();
-                        }
-                    }
+                    store.notify_by_key(&key).await;
                 }
                 list.extend(values);
                 let len = list.len() as i64;
+
                 Some(RedisType::Integer(len))
             }
             RedisCommand::LPUSH(key, values) => {
                 let mut lists_guard = store.lists.lock().await;
-                let key_clone = key.clone();
-                let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
+                let list = lists_guard.entry(key.clone()).or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    if let Some(clients_notifiers) =
-                        store.client_notifiers.lock().await.get(&key_clone)
-                    {
-                        println!("notifiers={:?}", clients_notifiers);
-                        for client_notifier in clients_notifiers {
-                            client_notifier.notify_one();
-                        }
-                    }
+                    store.notify_by_key(&key).await;
                 }
                 for value in values.iter() {
                     list.insert(0, value.clone());
@@ -285,44 +202,18 @@ where {
                         return Some(RedisType::NullArray);
                     }
 
-                    {
-                        let client_notifier_clone = Arc::clone(&client.notifier);
-                        let mut notifiers = store.client_notifiers.lock().await;
-                        notifiers
-                            .entry(key.clone())
-                            .or_insert_with(Vec::new)
-                            .push(client_notifier_clone);
-                    }
-
-                    if timeout > 0.0 {
-                        let remaining_timeout = std::time::Duration::from_millis(
-                            (timeout * 1000.0) as u64 - elapsed as u64,
-                        );
-                        tokio::select! {
-                            _ = client.notifier.notified() => {},
-                            _ = tokio::time::sleep(remaining_timeout) => return Some(RedisType::NullArray),
-                        }
-                    } else {
-                        client.notifier.notified().await;
-                    }
-
-                    if let Some(vec) = store.client_notifiers.lock().await.get_mut(&key) {
-                        vec.retain(|n| !Arc::ptr_eq(n, &client.notifier));
-                    }
+                    let remaining_timeout = std::time::Duration::from_millis(
+                        (timeout * 1000.0) as u64 - elapsed as u64,
+                    );
+                    match store.wait_until_timeout(&key, remaining_timeout, &client.notifier).await{
+                        WaitResult::Timeout => {
+                            return Some(RedisType::NullArray);
+                        },
+                        _ => {},
+                    };
                 }
             }
             RedisCommand::ZADD(_, _, _) => todo!(),
-        }
-    }
-
-    async fn write_stream<T>(stream: &mut T, value: &Option<RedisType>)
-    where
-        T: AsyncWriteExt + Unpin,
-    {
-        if let Some(val) = value {
-            if stream.write_all(&val.serialize()).await.is_err() {
-                eprintln!("error writing to stream");
-            }
         }
     }
 }
@@ -883,6 +774,59 @@ mod tests {
             RedisType::Array(vec![
                 RedisType::bulk_string("myblist"),
                 RedisType::bulk_string("one")
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_blpop_timeout() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let timeout_secs = 0.1; // Timeout curto para o teste
+
+        let command = RedisCommand::BLPOP("myblist".to_string(), timeout_secs);
+        let start = tokio::time::Instant::now();
+        let result = RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+        let duration = start.elapsed();
+
+        assert_eq!(result, RedisType::NullArray);
+        assert!(duration >= Duration::from_secs_f64(timeout_secs));
+    }
+
+    #[tokio::test]
+    async fn test_handle_blpop_waits_for_rpush() {
+        // 1. Setup: Store compartilhado e um cliente para o BLPOP
+        let store = Arc::new(RedisStore::new());
+        let (blpop_client, _blpop_stream) = new_client_for_test();
+        let key = "myblist_wait".to_string();
+
+        // 2. Task 1: Executa o BLPOP em uma nova task.
+        // Ele ficará bloqueado pois a lista 'myblist_wait' está vazia.
+        let store_for_blpop = store.clone();
+        let key_for_blpop = key.clone();
+        let blpop_handle = tokio::spawn(async move {
+            let command = RedisCommand::BLPOP(key_for_blpop, 2.0); // Timeout de 2s
+            RedisServer::handle_command(command, &blpop_client, &store_for_blpop).await
+        });
+
+        // 3. Pausa breve para garantir que o BLPOP já começou a esperar.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // 4. Task 2: Outro cliente faz um RPUSH, que deve notificar e desbloquear o BLPOP.
+        let (rpush_client, _rpush_stream) = new_client_for_test();
+        let rpush_command = RedisCommand::RPUSH(key.clone(), vec!["value1".to_string()]);
+        RedisServer::handle_command(rpush_command, &rpush_client, &store).await;
+
+        // 5. Aguarda o resultado da task do BLPOP e verifica se está correto.
+        let blpop_result = blpop_handle.await.unwrap().unwrap();
+
+        assert_eq!(
+            blpop_result,
+            RedisType::Array(vec![
+                RedisType::bulk_string(&key),
+                RedisType::bulk_string("value1")
             ])
         );
     }

@@ -3,6 +3,8 @@ mod commands;
 mod types;
 mod server;
 mod utils;
+mod store;
+mod client;
 
 use server::RedisServer;
 use tokio::io::Result;
