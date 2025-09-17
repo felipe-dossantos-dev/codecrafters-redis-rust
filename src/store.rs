@@ -6,7 +6,7 @@ use std::{
 
 use tokio::sync::{Mutex, Notify};
 
-use crate::commands::RedisKeyValue;
+use crate::commands::{RedisKeyValue, SortedValue};
 
 #[derive(Debug, PartialEq)]
 pub enum WaitResult {
@@ -18,6 +18,7 @@ pub enum WaitResult {
 pub struct RedisStore {
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
+    pub sorted_sets: Mutex<HashMap<String, VecDeque<SortedValue>>>,
     // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
     pub client_notifiers: Mutex<HashMap<String, Vec<Arc<Notify>>>>,
 }
@@ -27,6 +28,7 @@ impl RedisStore {
         Self {
             pairs: Mutex::new(HashMap::new()),
             lists: Mutex::new(HashMap::new()),
+            sorted_sets: Mutex::new(HashMap::new()),
             client_notifiers: Mutex::new(HashMap::new()),
         }
     }

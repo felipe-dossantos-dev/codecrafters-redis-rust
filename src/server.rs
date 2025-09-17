@@ -3,9 +3,9 @@ use std::{
         hash_map::Entry::{Occupied, Vacant},
         HashMap, VecDeque,
     },
-    sync::Arc, time::Duration,
+    sync::Arc,
+    time::Duration,
 };
-
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -205,15 +205,24 @@ impl RedisServer {
                     let remaining_timeout = std::time::Duration::from_millis(
                         (timeout * 1000.0) as u64 - elapsed as u64,
                     );
-                    match store.wait_until_timeout(&key, remaining_timeout, &client.notifier).await{
+                    match store
+                        .wait_until_timeout(&key, remaining_timeout, &client.notifier)
+                        .await
+                    {
                         WaitResult::Timeout => {
                             return Some(RedisType::NullArray);
-                        },
-                        _ => {},
+                        }
+                        _ => {}
                     };
                 }
             }
-            RedisCommand::ZADD(_, _, _) => todo!(),
+            RedisCommand::ZADD(key, _, values) => {
+                let mut ss_guard = store.sorted_sets.lock().await;
+                let ss = ss_guard.entry(key.clone()).or_insert_with(VecDeque::new);
+                let len = values.len() as i64;
+                ss.extend(values);
+                Some(RedisType::Integer(len))
+            },
         }
     }
 }
@@ -257,6 +266,8 @@ mod tests {
     use super::*;
     use crate::commands::RedisCommand;
     use crate::commands::RedisKeyValue;
+    use crate::commands::SortedAddOptions;
+    use crate::commands::SortedValue;
     use crate::types::RedisType;
     use crate::utils;
 
@@ -829,5 +840,30 @@ mod tests {
                 RedisType::bulk_string("value1")
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_zadd() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+
+        let command = RedisCommand::ZADD(
+            "mylist".to_string(),
+            SortedAddOptions::new(),
+            vec![
+                SortedValue {
+                    member: "1".to_string(),
+                    score: 0.1,
+                },
+                SortedValue {
+                    member: "2".to_string(),
+                    score: 1.0,
+                },
+            ],
+        );
+
+        let result = RedisServer::handle_command(command, &client, &store).await;
+
+        assert_eq!(result, Some(RedisType::Integer(2)));
     }
 }

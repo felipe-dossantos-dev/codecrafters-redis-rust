@@ -71,8 +71,8 @@ pub struct SortedAddOptions {
 }
 
 impl SortedAddOptions {
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Self {
-        let mut options = SortedAddOptions {
+    pub fn new() -> SortedAddOptions {
+        return SortedAddOptions {
             xx: false,
             nx: false,
             lt: false,
@@ -80,6 +80,10 @@ impl SortedAddOptions {
             ch: false,
             incr: false,
         };
+    }
+
+    pub fn parse(args: &mut IntoIter<RedisType>) -> Self {
+        let mut options = SortedAddOptions::new();
 
         while let Some(prop_name) = args.as_slice().get(0) {
             let option_str = prop_name
