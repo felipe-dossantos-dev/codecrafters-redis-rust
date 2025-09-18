@@ -15,7 +15,9 @@ use tokio::{
 
 use crate::{
     client::RedisClient,
-    commands::{RedisCommand, RedisKeyValue},
+    commands::sorted_sets::{SortedAddOptions, SortedValue},
+    commands::zadd::ZAddCommand,
+    commands::RedisCommand,
     store::{RedisStore, WaitResult},
     types::RedisType,
     utils,
@@ -107,67 +109,71 @@ impl RedisServer {
         store: &Arc<RedisStore>,
     ) -> Option<RedisType> {
         match command {
-            RedisCommand::GET(key) => {
-                let response = match store.pairs.lock().await.get(&key.to_string()) {
+            RedisCommand::GET(cmd) => {
+                let response = match store.pairs.lock().await.get(&cmd.key.to_string()) {
                     Some(val) if !val.is_expired() => RedisType::bulk_string(&val.value),
                     _ => RedisType::Null,
                 };
                 Some(response)
             }
-            RedisCommand::SET(key, value) => {
-                store.pairs.lock().await.insert(key.to_string(), value);
+            RedisCommand::SET(cmd) => {
+                store.pairs.lock().await.insert(cmd.key, cmd.value);
                 Some(RedisType::ok())
             }
-            RedisCommand::PING => Some(RedisType::pong()),
-            RedisCommand::ECHO(value) => Some(RedisType::bulk_string(&value)),
-            RedisCommand::RPUSH(key, values) => {
+            RedisCommand::PING(_) => Some(RedisType::pong()),
+            RedisCommand::ECHO(cmd) => Some(RedisType::bulk_string(&cmd.message)),
+            RedisCommand::RPUSH(cmd) => {
                 let mut lists_guard = store.lists.lock().await;
-                let list = lists_guard.entry(key.clone()).or_insert_with(VecDeque::new);
+                let list = lists_guard
+                    .entry(cmd.key.clone())
+                    .or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    store.notify_by_key(&key).await;
+                    store.notify_by_key(&cmd.key).await;
                 }
-                list.extend(values);
+                list.extend(cmd.values);
                 let len = list.len() as i64;
 
                 Some(RedisType::Integer(len))
             }
-            RedisCommand::LPUSH(key, values) => {
+            RedisCommand::LPUSH(cmd) => {
                 let mut lists_guard = store.lists.lock().await;
-                let list = lists_guard.entry(key.clone()).or_insert_with(VecDeque::new);
+                let list = lists_guard
+                    .entry(cmd.key.clone())
+                    .or_insert_with(VecDeque::new);
                 if list.is_empty() {
-                    store.notify_by_key(&key).await;
+                    store.notify_by_key(&cmd.key).await;
                 }
-                for value in values.iter() {
+                for value in cmd.values.iter() {
                     list.insert(0, value.clone());
                 }
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
             }
-            RedisCommand::LRANGE(key, mut start_index, mut end_index) => {
-                if let Some(list_value) = store.lists.lock().await.get(&key.to_string()) {
+            RedisCommand::LRANGE(mut cmd) => {
+                if let Some(list_value) = store.lists.lock().await.get(&cmd.key.to_string()) {
                     let list_len = list_value.len() as i64;
-
-                    if start_index > list_len {
+                    // TODO: levar essa lógica para a construcao do objeto
+                    if cmd.start > list_len {
                         return Some(RedisType::Array(vec![]));
                     }
 
-                    if start_index < 0 {
-                        start_index += list_len
+                    if cmd.start < 0 {
+                        cmd.start += list_len
                     }
 
-                    let start = start_index.max(0) as usize;
+                    let start = cmd.start.max(0) as usize;
 
-                    if end_index < 0 {
-                        end_index += list_len
+                    if cmd.end < 0 {
+                        cmd.end += list_len
                     }
 
-                    if end_index > list_len {
-                        end_index = list_len - 1
+                    if cmd.end > list_len {
+                        cmd.end = list_len - 1
                     };
 
-                    let end = end_index.max(0) as usize;
+                    let end = cmd.end.max(0) as usize;
 
-                    if start_index > end_index {
+                    if cmd.start > cmd.end {
                         return Some(RedisType::Array(vec![]));
                     }
 
@@ -180,33 +186,33 @@ impl RedisServer {
                 }
                 Some(RedisType::Array(vec![]))
             }
-            RedisCommand::LLEN(key) => {
+            RedisCommand::LLEN(cmd) => {
                 let mut lists_guard = store.lists.lock().await;
-                let list = lists_guard.entry(key).or_insert_with(VecDeque::new);
+                let list = lists_guard.entry(cmd.key).or_insert_with(VecDeque::new);
                 let len = list.len() as i64;
                 Some(RedisType::Integer(len))
             }
-            RedisCommand::LPOP(key, count) => lpop(&store.lists, key, count).await,
-            RedisCommand::BLPOP(key, timeout) => {
+            RedisCommand::LPOP(cmd) => lpop(&store.lists, cmd.key, cmd.count).await,
+            RedisCommand::BLPOP(cmd) => {
                 let start_time = utils::now_millis();
                 loop {
-                    let lpop_result = lpop(&store.lists, key.clone(), 1).await;
+                    let lpop_result = lpop(&store.lists, cmd.key.clone(), 1).await;
                     if !matches!(lpop_result, Some(RedisType::Null)) {
                         return lpop_result.map(|val| {
-                            RedisType::Array(vec![RedisType::bulk_string(key.as_str()), val])
+                            RedisType::Array(vec![RedisType::bulk_string(cmd.key.as_str()), val])
                         });
                     }
 
                     let elapsed = utils::now_millis() - start_time;
-                    if timeout > 0.0 && elapsed >= (timeout * 1000.0) as u128 {
+                    if cmd.timeout > 0.0 && elapsed >= (cmd.timeout * 1000.0) as u128 {
                         return Some(RedisType::NullArray);
                     }
 
                     let remaining_timeout = std::time::Duration::from_millis(
-                        (timeout * 1000.0) as u64 - elapsed as u64,
+                        (cmd.timeout * 1000.0) as u64 - elapsed as u64,
                     );
                     match store
-                        .wait_until_timeout(&key, remaining_timeout, &client.notifier)
+                        .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
                         .await
                     {
                         WaitResult::Timeout => {
@@ -216,13 +222,13 @@ impl RedisServer {
                     };
                 }
             }
-            RedisCommand::ZADD(key, _, values) => {
+            RedisCommand::ZADD(cmd) => {
                 let mut ss_guard = store.sorted_sets.lock().await;
-                let ss = ss_guard.entry(key.clone()).or_insert_with(VecDeque::new);
-                let len = values.len() as i64;
-                ss.extend(values);
+                let ss = ss_guard.entry(cmd.key).or_insert_with(VecDeque::new);
+                let len = cmd.values.len() as i64;
+                ss.extend(cmd.values);
                 Some(RedisType::Integer(len))
-            },
+            }
         }
     }
 }
@@ -264,10 +270,21 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::commands::RedisCommand;
-    use crate::commands::RedisKeyValue;
-    use crate::commands::SortedAddOptions;
-    use crate::commands::SortedValue;
+    use crate::commands::{
+        blpop::BLPopCommand,
+        echo::EchoCommand,
+        get::GetCommand,
+        key_value::RedisKeyValue,
+        llen::LLenCommand,
+        lpop::LPopCommand,
+        lpush::LPushCommand,
+        lrange::LRangeCommand,
+        ping::PingCommand,
+        rpush::RPushCommand,
+        set::SetCommand,
+        sorted_sets::{SortedAddOptions, SortedValue},
+        zadd::ZAddCommand,
+    };
     use crate::types::RedisType;
     use crate::utils;
 
@@ -280,10 +297,10 @@ mod tests {
     async fn test_handle_rpush_new_list() {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
-        let command = RedisCommand::RPUSH(
-            "mylist".to_string(),
-            vec!["one".to_string(), "two".to_string()],
-        );
+        let command = RedisCommand::RPUSH(RPushCommand {
+            key: "mylist".to_string(),
+            values: vec!["one".to_string(), "two".to_string()],
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -301,10 +318,10 @@ mod tests {
     async fn test_handle_lpush_new_list() {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
-        let command = RedisCommand::LPUSH(
-            "mylist".to_string(),
-            vec!["one".to_string(), "two".to_string()],
-        );
+        let command = RedisCommand::LPUSH(LPushCommand {
+            key: "mylist".to_string(),
+            values: vec!["one".to_string(), "two".to_string()],
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -328,10 +345,10 @@ mod tests {
             .await
             .insert("mylist".to_string(), VecDeque::from(["zero".to_string()]));
 
-        let command = RedisCommand::RPUSH(
-            "mylist".to_string(),
-            vec!["one".to_string(), "two".to_string()],
-        );
+        let command = RedisCommand::RPUSH(RPushCommand {
+            key: "mylist".to_string(),
+            values: vec!["one".to_string(), "two".to_string()],
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -359,10 +376,10 @@ mod tests {
             .await
             .insert("mylist".to_string(), VecDeque::from(["zero".to_string()]));
 
-        let command = RedisCommand::LPUSH(
-            "mylist".to_string(),
-            vec!["one".to_string(), "two".to_string()],
-        );
+        let command = RedisCommand::LPUSH(LPushCommand {
+            key: "mylist".to_string(),
+            values: vec!["one".to_string(), "two".to_string()],
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -384,7 +401,11 @@ mod tests {
     async fn test_handle_lrange_non_existent_key() {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
-        let command = RedisCommand::LRANGE("no-such-list".to_string(), 0, 1);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "no-such-list".to_string(),
+            start: 0,
+            end: 1,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -403,7 +424,11 @@ mod tests {
             .await
             .insert("mylist".to_string(), VecDeque::new());
 
-        let command = RedisCommand::LRANGE("mylist".to_string(), 0, 1);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: 0,
+            end: 1,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -421,7 +446,11 @@ mod tests {
             VecDeque::from(["one".to_string(), "two".to_string(), "three".to_string()]),
         );
 
-        let command = RedisCommand::LRANGE("mylist".to_string(), 0, 2);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: 0,
+            end: 2,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -451,7 +480,11 @@ mod tests {
                 "e".to_string(),
             ]),
         );
-        let command = RedisCommand::LRANGE("mylist".to_string(), -2, -1);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: -2,
+            end: -1,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -465,7 +498,11 @@ mod tests {
             ])
         );
 
-        let command = RedisCommand::LRANGE("mylist".to_string(), 0, -3);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: 0,
+            end: -3,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -480,7 +517,11 @@ mod tests {
             ])
         );
 
-        let command = RedisCommand::LRANGE("mylist".to_string(), -6, -1);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: -6,
+            end: -1,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -508,7 +549,11 @@ mod tests {
             .await
             .insert("mylist".to_string(), VecDeque::from(["one".to_string()]));
 
-        let command = RedisCommand::LRANGE("mylist".to_string(), 0, 10);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: 0,
+            end: 10,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -530,7 +575,11 @@ mod tests {
             .await
             .insert("mylist".to_string(), VecDeque::from(["one".to_string()]));
 
-        let command = RedisCommand::LRANGE("mylist".to_string(), 5, 10);
+        let command = RedisCommand::LRANGE(LRangeCommand {
+            key: "mylist".to_string(),
+            start: 5,
+            end: 10,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -549,7 +598,9 @@ mod tests {
             .await
             .insert("mylist".to_string(), VecDeque::from(["one".to_string()]));
 
-        let command = RedisCommand::LLEN("mylist".to_string());
+        let command = RedisCommand::LLEN(LLenCommand {
+            key: "mylist".to_string(),
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -572,7 +623,10 @@ mod tests {
             ]),
         );
 
-        let command = RedisCommand::LPOP("mylist".to_string(), 1);
+        let command = RedisCommand::LPOP(LPopCommand {
+            key: "mylist".to_string(),
+            count: 1,
+        });
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
@@ -597,7 +651,10 @@ mod tests {
                 "4".to_string(),
             ]),
         );
-        let command = RedisCommand::LPOP("mylist".to_string(), 2);
+        let command = RedisCommand::LPOP(LPopCommand {
+            key: "mylist".to_string(),
+            count: 2,
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -621,7 +678,7 @@ mod tests {
     async fn test_handle_ping() {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
-        let command = RedisCommand::PING;
+        let command = RedisCommand::PING(PingCommand);
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -634,7 +691,9 @@ mod tests {
     async fn test_handle_echo() {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
-        let command = RedisCommand::ECHO("hello world".to_string());
+        let command = RedisCommand::ECHO(EchoCommand {
+            message: "hello world".to_string(),
+        });
 
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -647,7 +706,9 @@ mod tests {
     async fn test_handle_get_non_existent_key_in_server() {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
-        let get_command = RedisCommand::GET("nonexistent".to_string());
+        let get_command = RedisCommand::GET(GetCommand {
+            key: "nonexistent".to_string(),
+        });
         let get_result = RedisServer::handle_command(get_command, &client, &store)
             .await
             .unwrap();
@@ -665,7 +726,9 @@ mod tests {
         };
         store.pairs.lock().await.insert(key.clone(), value);
 
-        let command = RedisCommand::GET(key);
+        let command = RedisCommand::GET(GetCommand {
+            key: key.to_string(),
+        });
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
@@ -684,7 +747,9 @@ mod tests {
         };
         store.pairs.lock().await.insert(key.clone(), value);
 
-        let command = RedisCommand::GET(key);
+        let command = RedisCommand::GET(GetCommand {
+            key: key.to_string(),
+        });
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
@@ -702,7 +767,10 @@ mod tests {
             expired_at_millis: None,
         };
 
-        let command = RedisCommand::SET(key.clone(), value);
+        let command = RedisCommand::SET(SetCommand {
+            key: key.clone(),
+            value,
+        });
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
@@ -724,7 +792,10 @@ mod tests {
             expired_at_millis: Some(utils::now_millis() + 10000),
         };
 
-        let command = RedisCommand::SET(key.clone(), value);
+        let command = RedisCommand::SET(SetCommand {
+            key: key.clone(),
+            value,
+        });
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
@@ -775,7 +846,10 @@ mod tests {
             .await
             .insert("myblist".to_string(), VecDeque::from(["one".to_string()]));
 
-        let command = RedisCommand::BLPOP("myblist".to_string(), 0.0);
+        let command = RedisCommand::BLPOP(BLPopCommand {
+            key: "myblist".to_string(),
+            timeout: 0.0,
+        });
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
@@ -795,7 +869,10 @@ mod tests {
         let store = Arc::new(RedisStore::new());
         let timeout_secs = 0.1; // Timeout curto para o teste
 
-        let command = RedisCommand::BLPOP("myblist".to_string(), timeout_secs);
+        let command = RedisCommand::BLPOP(BLPopCommand {
+            key: "myblist".to_string(),
+            timeout: timeout_secs,
+        });
         let start = tokio::time::Instant::now();
         let result = RedisServer::handle_command(command, &client, &store)
             .await
@@ -818,7 +895,10 @@ mod tests {
         let store_for_blpop = store.clone();
         let key_for_blpop = key.clone();
         let blpop_handle = tokio::spawn(async move {
-            let command = RedisCommand::BLPOP(key_for_blpop, 2.0); // Timeout de 2s
+            let command = RedisCommand::BLPOP(BLPopCommand {
+                key: key_for_blpop,
+                timeout: 2.0,
+            }); // Timeout de 2s
             RedisServer::handle_command(command, &blpop_client, &store_for_blpop).await
         });
 
@@ -827,7 +907,10 @@ mod tests {
 
         // 4. Task 2: Outro cliente faz um RPUSH, que deve notificar e desbloquear o BLPOP.
         let (rpush_client, _rpush_stream) = new_client_for_test();
-        let rpush_command = RedisCommand::RPUSH(key.clone(), vec!["value1".to_string()]);
+        let rpush_command = RedisCommand::RPUSH(RPushCommand {
+            key: key.clone(),
+            values: vec!["value1".to_string()],
+        });
         RedisServer::handle_command(rpush_command, &rpush_client, &store).await;
 
         // 5. Aguarda o resultado da task do BLPOP e verifica se está correto.
@@ -847,10 +930,10 @@ mod tests {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
 
-        let command = RedisCommand::ZADD(
-            "mylist".to_string(),
-            SortedAddOptions::new(),
-            vec![
+        let command = RedisCommand::ZADD(ZAddCommand {
+            key: "mylist".to_string(),
+            options: SortedAddOptions::new(),
+            values: vec![
                 SortedValue {
                     member: "1".to_string(),
                     score: 0.1,
@@ -860,7 +943,7 @@ mod tests {
                     score: 1.0,
                 },
             ],
-        );
+        });
 
         let result = RedisServer::handle_command(command, &client, &store).await;
 

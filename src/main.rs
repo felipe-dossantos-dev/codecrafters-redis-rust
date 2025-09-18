@@ -1,14 +1,13 @@
 #![allow(unused_imports)]
-mod commands;
-mod types;
-mod server;
-mod utils;
-mod store;
 mod client;
+mod commands;
+mod server;
+mod store;
+mod types;
+mod utils;
 
 use server::RedisServer;
 use tokio::io::Result;
-
 
 #[tokio::main]
 async fn main() -> Result<()> {

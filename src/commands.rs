@@ -1,205 +1,56 @@
+pub mod blpop;
+pub mod command_utils;
+pub mod echo;
+pub mod get;
+pub mod key_value;
+pub mod llen;
+pub mod lpop;
+pub mod lpush;
+pub mod lrange;
+pub mod ping;
+pub mod rpush;
+pub mod set;
+pub mod sorted_sets;
+pub mod zadd;
+
 use std::{
     time::{SystemTime, UNIX_EPOCH},
     vec::IntoIter,
 };
 
-use crate::{types::RedisType, utils};
+use crate::{
+    commands::{
+        blpop::BLPopCommand,
+        echo::EchoCommand,
+        get::GetCommand,
+        key_value::RedisKeyValue,
+        llen::LLenCommand,
+        lpop::LPopCommand,
+        lpush::LPushCommand,
+        lrange::LRangeCommand,
+        ping::PingCommand,
+        rpush::RPushCommand,
+        set::SetCommand,
+        sorted_sets::{SortedAddOptions, SortedValue},
+        zadd::ZAddCommand,
+    },
+    types::RedisType,
+    utils,
+};
 
-#[derive(Debug, PartialEq)]
-pub struct RedisKeyValue {
-    pub value: String,
-    pub expired_at_millis: Option<u128>,
-}
-
-impl RedisKeyValue {
-    pub fn is_expired(&self) -> bool {
-        if let Some(val) = self.expired_at_millis {
-            return val <= utils::now_millis();
-        }
-        false
-    }
-
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
-        let value = args
-            .next()
-            .ok_or_else(|| "Expected a value for RedisKeyValue".to_string())?;
-
-        let mut expired_at_millis: Option<u128> = None;
-
-        while let Some(prop_name) = args.next().and_then(|p| p.to_string()) {
-            match prop_name.to_ascii_uppercase().as_str() {
-                "PX" => {
-                    let ttl_arg = args
-                        .next()
-                        .and_then(|p| p.to_string())
-                        .ok_or("PX option requires a value")?;
-                    let ttl_value: u128 = ttl_arg
-                        .parse()
-                        .map_err(|e| format!("Cannot parse PX value: {}", e))?;
-                    expired_at_millis = Some(utils::now_millis() + ttl_value);
-                }
-                _ => (),
-            }
-        }
-        let value_str = value
-            .to_string()
-            .ok_or("Expected a string value for RedisKeyValue")?;
-        Ok(Self {
-            value: value_str,
-            expired_at_millis,
-        })
-    }
-}
-
-impl Clone for RedisKeyValue {
-    fn clone(&self) -> Self {
-        RedisKeyValue {
-            value: self.value.clone(),
-            expired_at_millis: self.expired_at_millis.clone(),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct SortedAddOptions {
-    pub xx: bool,   // Only update elements that already exist. Don't add new elements.
-    pub nx: bool,   // Only add new elements. Don't update already existing elements.
-    pub lt: bool, // Only update existing elements if the new score is less than the current score. This flag doesn't prevent adding new elements.
-    pub gt: bool, // Only update existing elements if the new score is greater than the current score. This flag doesn't prevent adding new elements.
-    pub ch: bool, // Modify the return value from the number of new elements added, to the total number of elements changed.
-    pub incr: bool, // When this option is specified ZADD acts like ZINCRBY. Only one score-element pair can be specified in this mode.
-}
-
-impl SortedAddOptions {
-    pub fn new() -> SortedAddOptions {
-        return SortedAddOptions {
-            xx: false,
-            nx: false,
-            lt: false,
-            gt: false,
-            ch: false,
-            incr: false,
-        };
-    }
-
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Self {
-        let mut options = SortedAddOptions::new();
-
-        while let Some(prop_name) = args.as_slice().get(0) {
-            let option_str = prop_name
-                .to_string()
-                .expect("cannot convert value to string")
-                .to_ascii_uppercase();
-            match option_str.as_str() {
-                "XX" => {
-                    options.xx = true;
-                }
-                "NX" => {
-                    options.nx = true;
-                }
-                "LT" => {
-                    options.lt = true;
-                }
-                "GT" => {
-                    options.gt = true;
-                }
-                "CH" => {
-                    options.ch = true;
-                }
-                "INCR" => {
-                    options.incr = true;
-                }
-                _ => {
-                    break;
-                }
-            }
-            args.next();
-        }
-        options
-    }
-}
-
-impl Clone for SortedAddOptions {
-    fn clone(&self) -> Self {
-        SortedAddOptions {
-            xx: self.xx.clone(),
-            nx: self.nx.clone(),
-            lt: self.lt.clone(),
-            gt: self.gt.clone(),
-            ch: self.ch.clone(),
-            incr: self.incr.clone(),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct SortedValue {
-    pub member: String,
-    pub score: f64,
-}
-
-impl Clone for SortedValue {
-    fn clone(&self) -> Self {
-        SortedValue {
-            member: self.member.clone(),
-            score: self.score.clone(),
-        }
-    }
-}
-
-impl SortedValue {
-    fn parse(args: &mut IntoIter<RedisType>) -> Option<Vec<SortedValue>> {
-        let mut sorted_values: Vec<SortedValue> = Vec::new();
-        while let (Some(score_arg), Some(member_arg)) = (args.next(), args.next()) {
-            if let (Some(score), Some(member)) = (score_arg.to_float(), member_arg.to_string()) {
-                sorted_values.push(SortedValue { member, score });
-            } else {
-                return None;
-            }
-        }
-        if sorted_values.is_empty() {
-            None
-        } else {
-            Some(sorted_values)
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum RedisCommand {
-    GET(String),
-    SET(String, RedisKeyValue),
-    PING,
-    ECHO(String),
-    RPUSH(String, Vec<String>),
-    LPUSH(String, Vec<String>),
-    LRANGE(String, i64, i64),
-    LLEN(String),
-    LPOP(String, i64),
-    BLPOP(String, f64),
-    ZADD(String, SortedAddOptions, Vec<SortedValue>),
-}
-
-impl Clone for RedisCommand {
-    fn clone(&self) -> Self {
-        match self {
-            RedisCommand::GET(key) => RedisCommand::GET(key.clone()),
-            RedisCommand::SET(key, value) => RedisCommand::SET(key.clone(), value.clone()),
-            RedisCommand::PING => RedisCommand::PING,
-            RedisCommand::ECHO(msg) => RedisCommand::ECHO(msg.clone()),
-            RedisCommand::RPUSH(key, values) => RedisCommand::RPUSH(key.clone(), values.clone()),
-            RedisCommand::LPUSH(key, values) => RedisCommand::LPUSH(key.clone(), values.clone()),
-            RedisCommand::LRANGE(key, start, end) => {
-                RedisCommand::LRANGE(key.clone(), *start, *end)
-            }
-            RedisCommand::LLEN(key) => RedisCommand::LLEN(key.clone()),
-            RedisCommand::LPOP(key, count) => RedisCommand::LPOP(key.clone(), count.clone()),
-            RedisCommand::BLPOP(key, timeout) => RedisCommand::BLPOP(key.clone(), timeout.clone()),
-            RedisCommand::ZADD(key, options, values) => {
-                RedisCommand::ZADD(key.clone(), options.clone(), values.clone())
-            }
-        }
-    }
+    GET(GetCommand),
+    SET(SetCommand),
+    PING(PingCommand),
+    ECHO(EchoCommand),
+    RPUSH(RPushCommand),
+    LPUSH(LPushCommand),
+    LRANGE(LRangeCommand),
+    LLEN(LLenCommand),
+    LPOP(LPopCommand),
+    BLPOP(BLPopCommand),
+    ZADD(ZAddCommand),
 }
 
 impl RedisCommand {
@@ -208,102 +59,53 @@ impl RedisCommand {
         for value in values {
             match value {
                 RedisType::Array(arr) => {
-                    // https://redis.io/docs/latest/develop/reference/protocol-spec/#sending-commands-to-a-redis-server
-                    // o client até pode mandar outros tipos, mas o que o protocolo entende como entrada de comandos
-                    // é somente um array de bulk strings
                     if arr.is_empty() {
                         continue;
                     }
 
                     let mut args = arr.into_iter();
 
-                    let command_name_result = Self::get_string(&mut args)
-                        .or_else(|_| Err("cant get the command name".to_string()))?;
+                    let command_name_result = args
+                        .next()
+                        .and_then(|f| f.to_string())
+                        .ok_or_else(|| "cant get the command name".to_string())?;
                     let command_name_uppercase = command_name_result.to_ascii_uppercase();
                     let command_name = command_name_uppercase.as_str();
 
                     match command_name {
                         "PING" => {
-                            commands.push(RedisCommand::PING);
+                            commands.push(RedisCommand::PING(PingCommand::parse(&mut args)?));
                         }
                         "ECHO" => {
-                            let value = Self::get_string(&mut args)?;
-                            commands.push(RedisCommand::ECHO(value));
+                            let echo_command = EchoCommand::parse(&mut args)?;
+                            commands.push(RedisCommand::ECHO(echo_command));
                         }
                         "GET" => {
-                            let key = Self::get_key(&mut args)?;
-                            commands.push(RedisCommand::GET(key));
+                            commands.push(RedisCommand::GET(GetCommand::parse(&mut args)?));
                         }
                         "SET" => {
-                            let key = Self::get_key(&mut args)?;
-                            let kv = RedisKeyValue::parse(&mut args)?;
-                            commands.push(RedisCommand::SET(key, kv));
+                            commands.push(RedisCommand::SET(SetCommand::parse(&mut args)?));
                         }
                         "RPUSH" => {
-                            let key = Self::get_key(&mut args)?;
-                            let values: Vec<String> =
-                                args.by_ref().filter_map(|t| t.to_string()).collect();
-                            if !values.is_empty() {
-                                commands.push(RedisCommand::RPUSH(key, values));
-                            } else {
-                                return Err("no values to push".to_string());
-                            }
+                            commands.push(RedisCommand::RPUSH(RPushCommand::parse(&mut args)?));
                         }
                         "LPUSH" => {
-                            let key = Self::get_key(&mut args)?;
-                            let values: Vec<String> =
-                                args.by_ref().filter_map(|t| t.to_string()).collect();
-                            if !values.is_empty() {
-                                commands.push(RedisCommand::LPUSH(key, values));
-                            } else {
-                                return Err("no values to push".to_string());
-                            }
+                            commands.push(RedisCommand::LPUSH(LPushCommand::parse(&mut args)?));
                         }
                         "LRANGE" => {
-                            let key = Self::get_key(&mut args)?;
-                            let start_arg = args.next().ok_or_else(|| {
-                                "Expected values for LRANGE start and end".to_string()
-                            })?;
-                            let end_arg = args.next().ok_or_else(|| {
-                                "Expected values for LRANGE start and end".to_string()
-                            })?;
-
-                            let start_int = start_arg.to_int().ok_or_else(|| {
-                                "Expected integer values for LRANGE start and end".to_string()
-                            })?;
-                            let end_int = end_arg.to_int().ok_or_else(|| {
-                                "Expected integer values for LRANGE start and end".to_string()
-                            })?;
-                            commands.push(RedisCommand::LRANGE(key, start_int, end_int));
+                            commands.push(RedisCommand::LRANGE(LRangeCommand::parse(&mut args)?));
                         }
                         "LLEN" => {
-                            let key = Self::get_key(&mut args)?;
-                            commands.push(RedisCommand::LLEN(key));
+                            commands.push(RedisCommand::LLEN(LLenCommand::parse(&mut args)?));
                         }
                         "LPOP" => {
-                            let key = Self::get_key(&mut args)?;
-                            let count_arg = args.next().unwrap_or(RedisType::Integer(1));
-                            let count = count_arg
-                                .to_int()
-                                .ok_or_else(|| "cannot convert count to int".to_string())?;
-
-                            commands.push(RedisCommand::LPOP(key, count));
+                            commands.push(RedisCommand::LPOP(LPopCommand::parse(&mut args)?));
                         }
                         "BLPOP" => {
-                            let key = Self::get_key(&mut args)?;
-                            let timeout_arg = args.next().unwrap_or(RedisType::bulk_string("0"));
-                            let timeout = timeout_arg
-                                .to_float()
-                                .ok_or_else(|| "cannot convert timeout to float".to_string())?;
-                            commands.push(RedisCommand::BLPOP(key, timeout));
+                            commands.push(RedisCommand::BLPOP(BLPopCommand::parse(&mut args)?));
                         }
                         "ZADD" => {
-                            let key = Self::get_key(&mut args)?;
-                            let options = SortedAddOptions::parse(&mut args);
-                            let values = SortedValue::parse(&mut args)
-                                .ok_or_else(|| "cant parse values".to_string())?;
-
-                            commands.push(RedisCommand::ZADD(key, options, values));
+                            commands.push(RedisCommand::ZADD(ZAddCommand::parse(&mut args)?));
                         }
                         _ => {
                             return Err("command not found".to_string());
@@ -311,10 +113,10 @@ impl RedisCommand {
                     }
                 }
                 RedisType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
-                    commands.push(RedisCommand::PING);
+                    commands.push(RedisCommand::PING(PingCommand));
                 }
                 RedisType::SimpleString(s) if s.eq_ignore_ascii_case("PING") => {
-                    commands.push(RedisCommand::PING);
+                    commands.push(RedisCommand::PING(PingCommand));
                 }
                 _ => {
                     return Err("value type not correct".to_string());
@@ -333,20 +135,6 @@ impl RedisCommand {
 
         return Ok(received_commands);
     }
-
-    fn get_string(args: &mut IntoIter<RedisType>) -> Result<String, String> {
-        if let Some(arg) = args.next().and_then(|f| f.to_string()) {
-            return Ok(arg);
-        }
-        Err("cant convert to string".to_string())
-    }
-
-    fn get_key(args: &mut IntoIter<RedisType>) -> Result<String, String> {
-        if let Some(arg) = args.next().and_then(|f| f.to_string()) {
-            return Ok(arg);
-        }
-        Err("cant found key".to_string())
-    }
 }
 
 #[cfg(test)]
@@ -359,7 +147,13 @@ mod tests {
             RedisType::bulk_string("ping"),
             RedisType::simple_string("ping"),
         ]);
-        assert_eq!(result, Ok(vec![RedisCommand::PING, RedisCommand::PING]));
+        assert_eq!(
+            result,
+            Ok(vec![
+                RedisCommand::PING(PingCommand),
+                RedisCommand::PING(PingCommand)
+            ])
+        );
     }
 
     #[test]
@@ -367,14 +161,21 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["echo", "teste teste"])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::ECHO("teste teste".to_string())])
+            Ok(vec![RedisCommand::ECHO(EchoCommand {
+                message: "teste teste".to_string()
+            })])
         );
     }
 
     #[test]
     fn test_commands_build_get() {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["get", "test"])]);
-        assert_eq!(result, Ok(vec![RedisCommand::GET("test".to_string())]))
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::GET(GetCommand {
+                key: "test".to_string()
+            })])
+        )
     }
 
     #[test]
@@ -382,13 +183,13 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["set", "test", "test"])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::SET(
-                "test".to_string(),
-                RedisKeyValue {
+            Ok(vec![RedisCommand::SET(SetCommand {
+                key: "test".to_string(),
+                value: RedisKeyValue {
                     value: "test".to_string(),
                     expired_at_millis: None
                 }
-            )])
+            })])
         );
     }
 
@@ -400,10 +201,10 @@ mod tests {
         .unwrap();
         assert_eq!(result.len(), 1);
         let command = &result[0];
-        if let RedisCommand::SET(key, key_value) = command {
-            assert_eq!(*key, "key".to_string());
-            assert_eq!(key_value.value, "value");
-            assert!(key_value.expired_at_millis.is_some());
+        if let RedisCommand::SET(set_command) = command {
+            assert_eq!(set_command.key, "key".to_string());
+            assert_eq!(set_command.value.value, "value");
+            assert!(set_command.value.expired_at_millis.is_some());
         } else {
             panic!("Expected Ok(RedisCommand::Set), but got {:?}", command);
         }
@@ -416,11 +217,11 @@ mod tests {
         ])])
         .unwrap();
         assert_eq!(result.len(), 1);
-        if let RedisCommand::SET(key, key_value) = &result[0] {
-            assert_eq!(*key, "key".to_string());
-            assert_eq!(key_value.value, "value");
+        if let RedisCommand::SET(set_command) = &result[0] {
+            assert_eq!(set_command.key, "key".to_string());
+            assert_eq!(set_command.value.value, "value");
             assert!(
-                key_value.expired_at_millis.is_some(),
+                set_command.value.expired_at_millis.is_some(),
                 "PX option should be case-insensitive"
             );
         }
@@ -433,10 +234,10 @@ mod tests {
         ])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::RPUSH(
-                "mylist".to_string(),
-                vec!["one".to_string(), "two".to_string()]
-            )])
+            Ok(vec![RedisCommand::RPUSH(RPushCommand {
+                key: "mylist".to_string(),
+                values: vec!["one".to_string(), "two".to_string()]
+            })])
         );
     }
 
@@ -447,17 +248,22 @@ mod tests {
         ])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::LPUSH(
-                "mylist".to_string(),
-                vec!["one".to_string(), "two".to_string()]
-            )])
+            Ok(vec![RedisCommand::LPUSH(LPushCommand {
+                key: "mylist".to_string(),
+                values: vec!["one".to_string(), "two".to_string()]
+            })])
         );
     }
 
     #[test]
     fn test_commands_build_llen() {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["llen", "mylist"])]);
-        assert_eq!(result, Ok(vec![RedisCommand::LLEN("mylist".to_string())]));
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::LLEN(LLenCommand {
+                key: "mylist".to_string()
+            })])
+        );
     }
 
     #[test]
@@ -465,28 +271,38 @@ mod tests {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist"])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::LPOP("mylist".to_string(), 1)])
+            Ok(vec![RedisCommand::LPOP(LPopCommand {
+                key: "mylist".to_string(),
+                count: 1
+            })])
         );
 
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist", "2"])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::LPOP("mylist".to_string(), 2)])
+            Ok(vec![RedisCommand::LPOP(LPopCommand {
+                key: "mylist".to_string(),
+                count: 2
+            })])
         );
     }
 
     #[test]
     fn test_commands_build_blpop() {
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist"])]);
-        assert_eq!(
-            result,
-            Ok(vec![RedisCommand::BLPOP("mylist".to_string(), 0.0)])
-        );
+        assert_eq!(result, Err("timeout not found".to_string()));
+
+        let result =
+            RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist", "err"])]);
+        assert_eq!(result, Err("timeout is not a float".to_string()));
 
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist", "2"])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::BLPOP("mylist".to_string(), 2.0)])
+            Ok(vec![RedisCommand::BLPOP(BLPopCommand {
+                key: "mylist".to_string(),
+                timeout: 2.0
+            })])
         );
     }
 
@@ -617,9 +433,9 @@ mod tests {
         ])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::ZADD(
-                "myzset".to_string(),
-                SortedAddOptions {
+            Ok(vec![RedisCommand::ZADD(ZAddCommand {
+                key: "myzset".to_string(),
+                options: SortedAddOptions {
                     xx: false,
                     nx: false,
                     lt: false,
@@ -627,7 +443,7 @@ mod tests {
                     ch: false,
                     incr: false
                 },
-                vec![
+                values: vec![
                     SortedValue {
                         score: 1.0,
                         member: "one".to_string()
@@ -637,7 +453,7 @@ mod tests {
                         member: "two".to_string()
                     }
                 ]
-            )])
+            })])
         );
     }
 
@@ -648,9 +464,9 @@ mod tests {
         ])]);
         assert_eq!(
             result,
-            Ok(vec![RedisCommand::ZADD(
-                "myzset".to_string(),
-                SortedAddOptions {
+            Ok(vec![RedisCommand::ZADD(ZAddCommand {
+                key: "myzset".to_string(),
+                options: SortedAddOptions {
                     xx: false,
                     nx: true,
                     lt: false,
@@ -658,11 +474,11 @@ mod tests {
                     ch: true,
                     incr: false
                 },
-                vec![SortedValue {
+                values: vec![SortedValue {
                     score: 1.0,
                     member: "one".to_string()
                 },]
-            )])
+            })])
         );
     }
 
@@ -670,7 +486,7 @@ mod tests {
     fn test_commands_build_errors() {
         // RPUSH with no values
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["rpush", "mylist"])]);
-        assert_eq!(result, Err("no values to push".to_string()));
+        assert_eq!(result, Err("RPUSH requires at least one value".to_string()));
 
         // LRANGE with missing args
         let result = RedisCommand::build(vec![RedisType::new_array(vec!["lrange", "mylist", "0"])]);

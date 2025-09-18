@@ -6,7 +6,8 @@ use std::{
 
 use tokio::sync::{Mutex, Notify};
 
-use crate::commands::{RedisKeyValue, SortedValue};
+use crate::commands::key_value::RedisKeyValue;
+use crate::commands::sorted_sets::SortedValue;
 
 #[derive(Debug, PartialEq)]
 pub enum WaitResult {
