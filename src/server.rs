@@ -1,7 +1,7 @@
 use std::{
     collections::{
         hash_map::Entry::{Occupied, Vacant},
-        HashMap, VecDeque,
+        BTreeSet, HashMap, VecDeque,
     },
     sync::Arc,
     time::Duration,
@@ -152,30 +152,10 @@ impl RedisServer {
             RedisCommand::LRANGE(mut cmd) => {
                 if let Some(list_value) = store.lists.lock().await.get(&cmd.key.to_string()) {
                     let list_len = list_value.len() as i64;
-                    // TODO: levar essa lógica para a construcao do objeto
-                    if cmd.start > list_len {
-                        return Some(RedisType::Array(vec![]));
-                    }
-
-                    if cmd.start < 0 {
-                        cmd.start += list_len
-                    }
-
-                    let start = cmd.start.max(0) as usize;
-
-                    if cmd.end < 0 {
-                        cmd.end += list_len
-                    }
-
-                    if cmd.end > list_len {
-                        cmd.end = list_len - 1
+                    let (start, end) = match cmd.treat_bounds(list_len) {
+                        Some(value) => value,
+                        None => return Some(RedisType::Array(vec![])),
                     };
-
-                    let end = cmd.end.max(0) as usize;
-
-                    if cmd.start > cmd.end {
-                        return Some(RedisType::Array(vec![]));
-                    }
 
                     let mut result_list: Vec<RedisType> = Vec::new();
 
@@ -223,11 +203,15 @@ impl RedisServer {
                 }
             }
             RedisCommand::ZADD(cmd) => {
-                let mut ss_guard = store.sorted_sets.lock().await;
-                let ss = ss_guard.entry(cmd.key).or_insert_with(VecDeque::new);
-                let len = cmd.values.len() as i64;
-                ss.extend(cmd.values);
-                Some(RedisType::Integer(len))
+                let mut ss = store.get_sorted_set_by_key(&cmd.key).await;
+                let mut added = 0;
+                for value in cmd.values {
+                    if !ss.contains_key(&value.member) {
+                        added += 1;
+                    }
+                    ss.insert(value.member, value.score);
+                }
+                Some(RedisType::Integer(added))
             }
         }
     }
@@ -941,6 +925,10 @@ mod tests {
                 SortedValue {
                     member: "2".to_string(),
                     score: 1.0,
+                },
+                SortedValue {
+                    member: "2".to_string(),
+                    score: 2.0,
                 },
             ],
         });

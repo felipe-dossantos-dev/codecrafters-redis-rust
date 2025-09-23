@@ -1,6 +1,6 @@
+use super::command_utils;
 use crate::types::RedisType;
 use std::vec::IntoIter;
-use super::command_utils;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct LRangeCommand {
@@ -28,5 +28,31 @@ impl LRangeCommand {
             .ok_or_else(|| "Expected integer values for LRANGE start and end".to_string())?;
 
         Ok(LRangeCommand { key, start, end })
+    }
+
+    pub fn treat_bounds(&mut self, list_len: i64) -> Option<(usize, usize)> {
+        if self.start > list_len {
+            return None;
+        }
+
+        if self.start < 0 {
+            self.start += list_len
+        }
+
+        let start = self.start.max(0) as usize;
+
+        if self.end < 0 {
+            self.end += list_len
+        }
+
+        if self.end > list_len {
+            self.end = list_len - 1
+        };
+
+        let end = self.end.max(0) as usize;
+        if self.start > self.end {
+            return None;
+        }
+        Some((start, end))
     }
 }

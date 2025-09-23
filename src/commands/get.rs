@@ -1,6 +1,6 @@
+use super::command_utils;
 use crate::types::RedisType;
 use std::vec::IntoIter;
-use super::command_utils;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GetCommand {
@@ -13,11 +13,3 @@ impl GetCommand {
         Ok(GetCommand { key })
     }
 }
-
-// pub async fn handle_get(command: GetCommand, store: &Arc<RedisStore>) -> Option<RedisType> {
-//     let response = match store.pairs.lock().await.get(&command.key) {
-//         Some(val) if !val.is_expired() => RedisType::bulk_string(&val.value),
-//         _ => RedisType::Null,
-//     };
-//     Some(response)
-// }

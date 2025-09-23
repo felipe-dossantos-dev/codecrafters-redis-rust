@@ -1,7 +1,4 @@
-use std::{
-    hash::Hash,
-    sync::Arc,
-};
+use std::{hash::Hash, sync::Arc};
 
 use nanoid::nanoid;
 
@@ -11,9 +8,7 @@ use tokio::{
     time::Instant,
 };
 
-use crate::
-    types::RedisType
-;
+use crate::types::RedisType;
 
 #[derive(Debug)]
 pub struct RedisClient<T> {
@@ -60,7 +55,12 @@ impl<T> RedisClient<T> {
                 eprintln!("error writing to stream");
             }
         } else {
-            if self.tcp_stream.write_all(&RedisType::Null.serialize()).await.is_err() {
+            if self
+                .tcp_stream
+                .write_all(&RedisType::Null.serialize())
+                .await
+                .is_err()
+            {
                 eprintln!("error writing to stream");
             }
         }

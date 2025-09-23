@@ -1,10 +1,10 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Duration,
 };
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, MutexGuard, Notify, OwnedMutexGuard};
 
 use crate::commands::key_value::RedisKeyValue;
 use crate::commands::sorted_sets::SortedValue;
@@ -19,8 +19,9 @@ pub enum WaitResult {
 pub struct RedisStore {
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
-    pub sorted_sets: Mutex<HashMap<String, VecDeque<SortedValue>>>,
+    pub sorted_sets: Mutex<HashMap<String, BTreeMap<String, f64>>>,
     // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
+    // pode dar bug pq a chave pode ser não única, dai poderia ter uma list mylist e um sset mylist e ter comandos esperando os dois
     pub client_notifiers: Mutex<HashMap<String, Vec<Arc<Notify>>>>,
 }
 
@@ -32,6 +33,14 @@ impl RedisStore {
             sorted_sets: Mutex::new(HashMap::new()),
             client_notifiers: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub async fn get_sorted_set_by_key(
+        &self,
+        key: &String,
+    ) -> tokio::sync::MappedMutexGuard<'_, BTreeMap<String, f64>> {
+        let guard = self.sorted_sets.lock().await;
+        MutexGuard::map(guard, |ss| ss.entry(key.clone()).or_default())
     }
 
     pub async fn notify_by_key(&self, key: &String) {

@@ -20,19 +20,9 @@ use std::{
 
 use crate::{
     commands::{
-        blpop::BLPopCommand,
-        echo::EchoCommand,
-        get::GetCommand,
-        key_value::RedisKeyValue,
-        llen::LLenCommand,
-        lpop::LPopCommand,
-        lpush::LPushCommand,
-        lrange::LRangeCommand,
-        ping::PingCommand,
-        rpush::RPushCommand,
-        set::SetCommand,
-        sorted_sets::{SortedAddOptions, SortedValue},
-        zadd::ZAddCommand,
+        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
+        llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
+        ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
     },
     types::RedisType,
     utils,
@@ -139,6 +129,8 @@ impl RedisCommand {
 
 #[cfg(test)]
 mod tests {
+    use crate::commands::sorted_sets::{SortedAddOptions, SortedValue};
+
     use super::*;
 
     #[test]

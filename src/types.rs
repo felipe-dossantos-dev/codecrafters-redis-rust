@@ -364,10 +364,7 @@ mod tests {
             RedisType::Error("error".to_string()).to_string(),
             Some("error".to_string())
         );
-        assert_eq!(
-            RedisType::Integer(123).to_string(),
-            Some("123".to_string())
-        );
+        assert_eq!(RedisType::Integer(123).to_string(), Some("123".to_string()));
         assert_eq!(
             RedisType::BulkString(b"bulk".to_vec()).to_string(),
             Some("bulk".to_string())
@@ -379,7 +376,10 @@ mod tests {
 
     #[test]
     fn test_to_int() {
-        assert_eq!(RedisType::SimpleString("123".to_string()).to_int(), Some(123));
+        assert_eq!(
+            RedisType::SimpleString("123".to_string()).to_int(),
+            Some(123)
+        );
         assert_eq!(RedisType::SimpleString("abc".to_string()).to_int(), None);
         assert_eq!(RedisType::Error("456".to_string()).to_int(), Some(456));
         assert_eq!(RedisType::Integer(789).to_int(), Some(789));
