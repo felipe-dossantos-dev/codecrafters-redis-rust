@@ -1,4 +1,8 @@
-use std::{cmp::Ordering, vec::IntoIter};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    vec::IntoIter,
+};
 
 use crate::types::RedisType;
 
@@ -111,5 +115,43 @@ impl SortedValue {
         } else {
             Some(sorted_values)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RedisSortedSet {
+    set: BTreeSet<SortedValue>,
+    map: BTreeMap<String, SortedValue>,
+}
+
+impl RedisSortedSet {
+    pub fn new() -> Self {
+        Self {
+            set: BTreeSet::new(),
+            map: BTreeMap::new(),
+        }
+    }
+
+    /// Replace pelo nome, retorna a quantidade de itens inseridos
+    pub fn insert(&mut self, value: SortedValue) -> i64 {
+        let mut count = 1;
+        if let Some(old_value) = self.map.insert(value.member.clone(), value.clone()) {
+            count = 0;
+            self.set.remove(&old_value);
+        }
+        self.set.insert(value.clone());
+        return count;
+    }
+
+    /// Retorna o lugar no ranking do membro
+    pub fn get_rank_by_member(&self, member: &String) -> Option<i64> {
+        if let Some(value) = self.map.get(member) {
+            return self
+                .set
+                .iter()
+                .position(|item| item == value)
+                .map(|f| f as i64);
+        }
+        None
     }
 }

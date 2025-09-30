@@ -15,9 +15,11 @@ use tokio::{
 
 use crate::{
     client::RedisClient,
-    commands::sorted_sets::{SortedAddOptions, SortedValue},
-    commands::zadd::ZAddCommand,
-    commands::RedisCommand,
+    commands::{
+        sorted_sets::{RedisSortedSet, SortedAddOptions, SortedValue},
+        zadd::ZAddCommand,
+        RedisCommand,
+    },
     store::{RedisStore, WaitResult},
     types::RedisType,
     utils,
@@ -206,23 +208,18 @@ impl RedisServer {
                 let mut ss = store.get_sorted_set_by_key(&cmd.key).await;
                 let mut added = 0;
                 for value in cmd.values {
-                    if !ss.contains_key(&value.member) {
-                        added += 1;
-                    }
-                    ss.insert(value.member, value.score);
+                    let count = ss.insert(value);
+                    println!("{}", count);
+                    added += count;
                 }
                 Some(RedisType::Integer(added))
             }
             RedisCommand::ZRANK(cmd) => {
                 let ss = store.get_sorted_set_by_key(&cmd.key).await;
-                if ss.contains_key(&cmd.member) {
-                    for (indice, (chave, _)) in ss.iter().rev().enumerate() {
-                        if chave == &cmd.member {
-                            return Some(RedisType::Integer(indice as i64));
-                        }
-                    }
+                match ss.get_rank_by_member(&cmd.member) {
+                    Some(val) => Some(RedisType::Integer(val)),
+                    None => Some(RedisType::Null),
                 }
-                Some(RedisType::Null)
             }
         }
     }
@@ -960,15 +957,15 @@ mod tests {
             options: SortedAddOptions::new(),
             values: vec![
                 SortedValue {
-                    member: "1".to_string(),
+                    member: "A".to_string(),
                     score: 1.0,
                 },
                 SortedValue {
-                    member: "3".to_string(),
-                    score: 3.0,
+                    member: "C".to_string(),
+                    score: 2.0,
                 },
                 SortedValue {
-                    member: "2".to_string(),
+                    member: "B".to_string(),
                     score: 2.0,
                 },
             ],
@@ -987,7 +984,7 @@ mod tests {
 
         let command = RedisCommand::ZRANK(ZRankCommand {
             key: "mylist".to_string(),
-            member: "3".to_string(),
+            member: "B".to_string(),
         });
 
         let result = RedisServer::handle_command(command, &client, &store).await;
