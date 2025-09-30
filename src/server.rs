@@ -209,7 +209,6 @@ impl RedisServer {
                 let mut added = 0;
                 for value in cmd.values {
                     let count = ss.insert(value);
-                    println!("{}", count);
                     added += count;
                 }
                 Some(RedisType::Integer(added))
@@ -953,20 +952,28 @@ mod tests {
         let store = Arc::new(RedisStore::new());
 
         let command = RedisCommand::ZADD(ZAddCommand {
-            key: "mylist".to_string(),
+            key: "zset_key".to_string(),
             options: SortedAddOptions::new(),
             values: vec![
                 SortedValue {
-                    member: "A".to_string(),
-                    score: 1.0,
+                    score: 100.0,
+                    member: "foo".to_string(),
                 },
                 SortedValue {
-                    member: "C".to_string(),
-                    score: 2.0,
+                    score: 100.0,
+                    member: "bar".to_string(),
                 },
                 SortedValue {
-                    member: "B".to_string(),
-                    score: 2.0,
+                    score: 20.0,
+                    member: "baz".to_string(),
+                },
+                SortedValue {
+                    score: 30.1,
+                    member: "caz".to_string(),
+                },
+                SortedValue {
+                    score: 40.2,
+                    member: "paz".to_string(),
                 },
             ],
         });
@@ -974,21 +981,38 @@ mod tests {
         RedisServer::handle_command(command, &client, &store).await;
 
         let command = RedisCommand::ZRANK(ZRankCommand {
-            key: "otherlist".to_string(),
-            member: "3".to_string(),
+            key: "other_key".to_string(),
+            member: "caz".to_string(),
         });
-
         let result = RedisServer::handle_command(command, &client, &store).await;
-
         assert_eq!(result, Some(RedisType::Null));
 
         let command = RedisCommand::ZRANK(ZRankCommand {
-            key: "mylist".to_string(),
-            member: "B".to_string(),
+            key: "zset_key".to_string(),
+            member: "caz".to_string(),
         });
-
         let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(1)));
 
+        let command = RedisCommand::ZRANK(ZRankCommand {
+            key: "zset_key".to_string(),
+            member: "baz".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
         assert_eq!(result, Some(RedisType::Integer(0)));
+
+        let command = RedisCommand::ZRANK(ZRankCommand {
+            key: "zset_key".to_string(),
+            member: "foo".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(4)));
+
+        let command = RedisCommand::ZRANK(ZRankCommand {
+            key: "zset_key".to_string(),
+            member: "bar".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(3)));
     }
 }

@@ -95,7 +95,6 @@ impl Ord for SortedValue {
     fn cmp(&self, other: &Self) -> Ordering {
         self.score
             .total_cmp(&other.score)
-            .reverse()
             .then_with(|| self.member.cmp(&other.member))
     }
 }
@@ -146,6 +145,7 @@ impl RedisSortedSet {
     /// Retorna o lugar no ranking do membro
     pub fn get_rank_by_member(&self, member: &String) -> Option<i64> {
         if let Some(value) = self.map.get(member) {
+            // TODO - slow
             return self
                 .set
                 .iter()
