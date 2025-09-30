@@ -12,6 +12,7 @@ pub mod rpush;
 pub mod set;
 pub mod sorted_sets;
 pub mod zadd;
+pub mod zrank;
 
 use std::{
     time::{SystemTime, UNIX_EPOCH},
@@ -23,6 +24,7 @@ use crate::{
         blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
         llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
         ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
+        zrank::ZRankCommand,
     },
     types::RedisType,
     utils,
@@ -41,6 +43,7 @@ pub enum RedisCommand {
     LPOP(LPopCommand),
     BLPOP(BLPopCommand),
     ZADD(ZAddCommand),
+    ZRANK(ZRankCommand),
 }
 
 impl RedisCommand {
@@ -96,6 +99,9 @@ impl RedisCommand {
                         }
                         "ZADD" => {
                             commands.push(RedisCommand::ZADD(ZAddCommand::parse(&mut args)?));
+                        }
+                        "ZRANK" => {
+                            commands.push(RedisCommand::ZRANK(ZRankCommand::parse(&mut args)?));
                         }
                         _ => {
                             return Err("command not found".to_string());
@@ -494,6 +500,29 @@ mod tests {
         assert_eq!(
             result,
             Err("Expected integer values for LRANGE start and end".to_string())
+        );
+    }
+
+    #[test]
+    fn test_commands_build_zrank() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrank"])]);
+        assert_eq!(result, Err("ZADD command requires a key".to_string()));
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zRank", "sorted_set"])]);
+        assert_eq!(result, Err("ZADD command requires a member".to_string()));
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "Zrank",
+            "sorted_set",
+            "mykey",
+        ])]);
+
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::ZRANK(ZRankCommand {
+                key: "sorted_set".to_string(),
+                member: "mykey".to_string()
+            })])
         );
     }
 }
