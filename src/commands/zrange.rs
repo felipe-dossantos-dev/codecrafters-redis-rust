@@ -36,14 +36,24 @@ impl ZRangeCommand {
             return None;
         }
 
+        if self.start < 0 {
+            self.start += set_size
+        }
+
+        let start = self.start.max(0) as usize;
+
+        if self.end < 0 {
+            self.end += set_size
+        }
+
         if self.end > set_size {
             self.end = set_size - 1
         };
 
+        let end = self.end.max(0) as usize;
         if self.start > self.end {
             return None;
         }
-
-        Some((self.start.clone() as usize, self.end.clone() as usize))
+        Some((start, end))
     }
 }
