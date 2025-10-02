@@ -220,6 +220,25 @@ impl RedisServer {
                     None => Some(RedisType::Null),
                 }
             }
+            RedisCommand::ZRANGE(mut cmd) => {
+                if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
+                    let (start, end) = match cmd.treat_bounds(ss.len()) {
+                        Some(value) => value,
+                        None => return Some(RedisType::Array(vec![])),
+                    };
+
+                    // não é muito amigavel com a memória pq vai estar trazendo o Set inteiro transformado para a memória
+                    // mas para corrigir isso precisaria escrever cada mapeamento direto no client
+                    // o que dificultaria a arquitetura no momento, talvez no futuro mexo nisso
+                    let result_list = ss
+                        .range(start, end)
+                        .map(|v| RedisType::bulk_string(&v.member))
+                        .collect();
+
+                    return Some(RedisType::Array(result_list));
+                }
+                Some(RedisType::Array(vec![]))
+            }
         }
     }
 }
@@ -275,6 +294,7 @@ mod tests {
         set::SetCommand,
         sorted_sets::{SortedAddOptions, SortedValue},
         zadd::ZAddCommand,
+        zrange::ZRangeCommand,
         zrank::ZRankCommand,
     };
     use crate::types::RedisType;
@@ -1014,5 +1034,96 @@ mod tests {
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
         assert_eq!(result, Some(RedisType::Integer(3)));
+    }
+
+    #[tokio::test]
+    async fn test_handle_zrange() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+
+        let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
+            key: "zset_key".to_string(),
+            options: SortedAddOptions::new(),
+            values: vec![
+                SortedValue {
+                    score: 100.0,
+                    member: "foo".to_string(),
+                },
+                SortedValue {
+                    score: 100.0,
+                    member: "bar".to_string(),
+                },
+                SortedValue {
+                    score: 20.0,
+                    member: "baz".to_string(),
+                },
+                SortedValue {
+                    score: 30.1,
+                    member: "caz".to_string(),
+                },
+                SortedValue {
+                    score: 40.2,
+                    member: "paz".to_string(),
+                },
+            ],
+        });
+
+        RedisServer::handle_command(command, &client, &store).await;
+
+        let command = RedisCommand::ZRANGE(ZRangeCommand {
+            key: "other_key".to_string(),
+            start: 0,
+            end: 1,
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Array(vec![])));
+
+        let command = RedisCommand::ZRANGE(ZRangeCommand {
+            key: "zset_key".to_string(),
+            start: 10,
+            end: 11,
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Array(vec![])));
+
+        let command = RedisCommand::ZRANGE(ZRangeCommand {
+            key: "zset_key".to_string(),
+            start: 4,
+            end: 2,
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Array(vec![])));
+
+        let command = RedisCommand::ZRANGE(ZRangeCommand {
+            key: "zset_key".to_string(),
+            start: 0,
+            end: 10,
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(
+            result,
+            Some(RedisType::Array(vec![
+                RedisType::bulk_string("baz"),
+                RedisType::bulk_string("caz"),
+                RedisType::bulk_string("paz"),
+                RedisType::bulk_string("bar"),
+                RedisType::bulk_string("foo"),
+            ]))
+        );
+
+        let command = RedisCommand::ZRANGE(ZRangeCommand {
+            key: "zset_key".to_string(),
+            start: 2,
+            end: 4,
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(
+            result,
+            Some(RedisType::Array(vec![
+                RedisType::bulk_string("paz"),
+                RedisType::bulk_string("bar"),
+                RedisType::bulk_string("foo"),
+            ]))
+        );
     }
 }

@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
+    collections::{btree_set::Iter, BTreeMap, BTreeSet},
+    iter::{Skip, Take},
     vec::IntoIter,
 };
 
@@ -153,5 +154,13 @@ impl RedisSortedSet {
                 .map(|f| f as i64);
         }
         None
+    }
+
+    pub fn len(&self) -> i64 {
+        return self.map.len() as i64;
+    }
+
+    pub fn range(&self, start: usize, end: usize) -> Take<Skip<Iter<'_, SortedValue>>> {
+        return self.set.iter().skip(start).take(end - start + 1);
     }
 }

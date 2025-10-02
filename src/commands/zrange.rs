@@ -1,0 +1,49 @@
+use super::command_utils;
+use crate::commands::sorted_sets::{SortedAddOptions, SortedValue};
+use crate::types::RedisType;
+use std::vec::IntoIter;
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct ZRangeCommand {
+    pub key: String,
+    pub start: i64,
+    pub end: i64,
+}
+
+impl ZRangeCommand {
+    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+        let key = command_utils::get_arg_as_string(args, "ZRANGE command requires a key")?;
+
+        let start_arg = args
+            .next()
+            .ok_or_else(|| "Expected values for ZRANGE start and end".to_string())?;
+        let end_arg = args
+            .next()
+            .ok_or_else(|| "Expected values for ZRANGE start and end".to_string())?;
+
+        let start = start_arg
+            .to_int()
+            .ok_or_else(|| "Expected integer values for ZRANGE start and end".to_string())?;
+        let end = end_arg
+            .to_int()
+            .ok_or_else(|| "Expected integer values for ZRANGE start and end".to_string())?;
+
+        Ok(ZRangeCommand { key, start, end })
+    }
+
+    pub fn treat_bounds(&mut self, set_size: i64) -> Option<(usize, usize)> {
+        if self.start >= set_size {
+            return None;
+        }
+
+        if self.end > set_size {
+            self.end = set_size - 1
+        };
+
+        if self.start > self.end {
+            return None;
+        }
+
+        Some((self.start.clone() as usize, self.end.clone() as usize))
+    }
+}

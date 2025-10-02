@@ -12,6 +12,7 @@ pub mod rpush;
 pub mod set;
 pub mod sorted_sets;
 pub mod zadd;
+pub mod zrange;
 pub mod zrank;
 
 use std::{
@@ -24,7 +25,7 @@ use crate::{
         blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
         llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
         ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
-        zrank::ZRankCommand,
+        zrange::ZRangeCommand, zrank::ZRankCommand,
     },
     types::RedisType,
     utils,
@@ -44,8 +45,11 @@ pub enum RedisCommand {
     BLPOP(BLPopCommand),
     ZADD(ZAddCommand),
     ZRANK(ZRankCommand),
+    ZRANGE(ZRangeCommand),
 }
 
+// TODO - tentar implementar algo como uma linguagem para fazer o parse, algo declarativo
+// e que cuide se está valido a quantidade de argumentos e os valores do
 impl RedisCommand {
     pub fn build(values: Vec<RedisType>) -> Result<Vec<RedisCommand>, String> {
         let mut commands: Vec<RedisCommand> = Vec::new();
@@ -102,6 +106,9 @@ impl RedisCommand {
                         }
                         "ZRANK" => {
                             commands.push(RedisCommand::ZRANK(ZRankCommand::parse(&mut args)?));
+                        }
+                        "ZRANGE" => {
+                            commands.push(RedisCommand::ZRANGE(ZRangeCommand::parse(&mut args)?));
                         }
                         _ => {
                             return Err("command not found".to_string());
@@ -522,6 +529,66 @@ mod tests {
             Ok(vec![RedisCommand::ZRANK(ZRankCommand {
                 key: "sorted_set".to_string(),
                 member: "mykey".to_string()
+            })])
+        );
+    }
+
+    #[test]
+    fn test_commands_build_zrange() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrange"])]);
+        assert_eq!(result, Err("ZRANGE command requires a key".to_string()));
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zRange", "sorted_set"])]);
+        assert_eq!(
+            result,
+            Err("Expected values for ZRANGE start and end".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "zRange",
+            "sorted_set",
+            "A",
+        ])]);
+        assert_eq!(
+            result,
+            Err("Expected values for ZRANGE start and end".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "zRange",
+            "sorted_set",
+            "A",
+            "A",
+        ])]);
+        assert_eq!(
+            result,
+            Err("Expected integer values for ZRANGE start and end".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "zRange",
+            "sorted_set",
+            "1",
+            "A",
+        ])]);
+        assert_eq!(
+            result,
+            Err("Expected integer values for ZRANGE start and end".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "zRange",
+            "sorted_set",
+            "0",
+            "1",
+        ])]);
+
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::ZRANGE(ZRangeCommand {
+                key: "sorted_set".to_string(),
+                start: 0,
+                end: 1
             })])
         );
     }
