@@ -1,4 +1,4 @@
-use super::command_utils;
+use super::traits::ParseableCommand;
 use crate::types::RedisType;
 use std::vec::IntoIter;
 
@@ -8,9 +8,9 @@ pub struct BLPopCommand {
     pub timeout: f64,
 }
 
-impl BLPopCommand {
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
-        let key = command_utils::get_arg_as_string(args, "BLPOP command requires a key")?;
+impl ParseableCommand for BLPopCommand {
+    fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+        let key = Self::get_arg_as_string(args, "BLPOP command requires a key")?;
         let timeout = args
             .next()
             .ok_or_else(|| "timeout not found")?

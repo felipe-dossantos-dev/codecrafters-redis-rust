@@ -1,5 +1,4 @@
 pub mod blpop;
-pub mod command_utils;
 pub mod echo;
 pub mod get;
 pub mod key_value;
@@ -11,9 +10,11 @@ pub mod ping;
 pub mod rpush;
 pub mod set;
 pub mod sorted_sets;
+pub mod traits;
 pub mod zadd;
 pub mod zrange;
 pub mod zrank;
+use crate::commands::traits::ParseableCommand;
 
 use std::{
     time::{SystemTime, UNIX_EPOCH},
@@ -21,6 +22,7 @@ use std::{
 };
 
 use crate::{
+    command_parser,
     commands::{
         blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
         llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
@@ -49,7 +51,7 @@ pub enum RedisCommand {
 }
 
 // TODO - tentar implementar algo como uma linguagem para fazer o parse, algo declarativo
-// e que cuide se está valido a quantidade de argumentos e os valores do
+// e que cuide se está valido a quantidade de argumentos e os valores dos argumentos
 impl RedisCommand {
     pub fn build(values: Vec<RedisType>) -> Result<Vec<RedisCommand>, String> {
         let mut commands: Vec<RedisCommand> = Vec::new();
@@ -61,7 +63,6 @@ impl RedisCommand {
                     }
 
                     let mut args = arr.into_iter();
-
                     let command_name_result = args
                         .next()
                         .and_then(|f| f.to_string())
@@ -69,50 +70,23 @@ impl RedisCommand {
                     let command_name_uppercase = command_name_result.to_ascii_uppercase();
                     let command_name = command_name_uppercase.as_str();
 
-                    match command_name {
-                        "PING" => {
-                            commands.push(RedisCommand::PING(PingCommand::parse(&mut args)?));
-                        }
-                        "ECHO" => {
-                            let echo_command = EchoCommand::parse(&mut args)?;
-                            commands.push(RedisCommand::ECHO(echo_command));
-                        }
-                        "GET" => {
-                            commands.push(RedisCommand::GET(GetCommand::parse(&mut args)?));
-                        }
-                        "SET" => {
-                            commands.push(RedisCommand::SET(SetCommand::parse(&mut args)?));
-                        }
-                        "RPUSH" => {
-                            commands.push(RedisCommand::RPUSH(RPushCommand::parse(&mut args)?));
-                        }
-                        "LPUSH" => {
-                            commands.push(RedisCommand::LPUSH(LPushCommand::parse(&mut args)?));
-                        }
-                        "LRANGE" => {
-                            commands.push(RedisCommand::LRANGE(LRangeCommand::parse(&mut args)?));
-                        }
-                        "LLEN" => {
-                            commands.push(RedisCommand::LLEN(LLenCommand::parse(&mut args)?));
-                        }
-                        "LPOP" => {
-                            commands.push(RedisCommand::LPOP(LPopCommand::parse(&mut args)?));
-                        }
-                        "BLPOP" => {
-                            commands.push(RedisCommand::BLPOP(BLPopCommand::parse(&mut args)?));
-                        }
-                        "ZADD" => {
-                            commands.push(RedisCommand::ZADD(ZAddCommand::parse(&mut args)?));
-                        }
-                        "ZRANK" => {
-                            commands.push(RedisCommand::ZRANK(ZRankCommand::parse(&mut args)?));
-                        }
-                        "ZRANGE" => {
-                            commands.push(RedisCommand::ZRANGE(ZRangeCommand::parse(&mut args)?));
-                        }
-                        _ => {
-                            return Err("command not found".to_string());
-                        }
+                    command_parser! {
+                        command_name,
+                        args,
+                        commands,
+                        "PING" => (PING, PingCommand),
+                        "ECHO" => (ECHO, EchoCommand),
+                        "GET" => (GET, GetCommand),
+                        "SET" => (SET, SetCommand),
+                        "RPUSH" => (RPUSH, RPushCommand),
+                        "LPUSH" => (LPUSH, LPushCommand),
+                        "LRANGE" => (LRANGE, LRangeCommand),
+                        "LLEN" => (LLEN, LLenCommand),
+                        "LPOP" => (LPOP, LPopCommand),
+                        "BLPOP" => (BLPOP, BLPopCommand),
+                        "ZADD" => (ZADD, ZAddCommand),
+                        "ZRANK" => (ZRANK, ZRankCommand),
+                        "ZRANGE" => (ZRANGE, ZRangeCommand),
                     }
                 }
                 RedisType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {

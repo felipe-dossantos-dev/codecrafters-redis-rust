@@ -208,7 +208,7 @@ impl RedisServer {
                 let mut ss = store.get_sorted_set_by_key(&cmd.key).await;
                 let mut added = 0;
                 for value in cmd.values {
-                    let count = ss.insert(value);
+                    let count = ss.replace(value);
                     added += count;
                 }
                 Some(RedisType::Integer(added))

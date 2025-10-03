@@ -17,11 +17,14 @@ pub enum WaitResult {
 
 #[derive(Debug)]
 pub struct RedisStore {
+    // TODO: criar uma estrutura de chaves únicas para depois criar transações por chave
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
     pub sorted_sets: Mutex<HashMap<String, RedisSortedSet>>,
     // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
     // pode dar bug pq a chave pode ser não única, dai poderia ter uma list mylist e um sset mylist e ter comandos esperando os dois
+    // TODO: transformar em channels
+    // https://tokio.rs/tokio/tutorial/channels
     pub client_notifiers: Mutex<HashMap<String, Vec<Arc<Notify>>>>,
 }
 

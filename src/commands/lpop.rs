@@ -1,6 +1,7 @@
+
+use super::traits::ParseableCommand;
 use crate::types::RedisType;
 use std::vec::IntoIter;
-use super::command_utils;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct LPopCommand {
@@ -8,9 +9,9 @@ pub struct LPopCommand {
     pub count: i64,
 }
 
-impl LPopCommand {
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
-        let key = command_utils::get_arg_as_string(args, "LPOP command requires a key")?;
+impl ParseableCommand for LPopCommand {
+    fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+        let key = Self::get_arg_as_string(args, "LPOP command requires a key")?;
 
         let count_arg = args.next().unwrap_or(RedisType::Integer(1));
         let count = count_arg

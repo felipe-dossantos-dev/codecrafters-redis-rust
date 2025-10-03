@@ -1,5 +1,4 @@
-use super::command_utils;
-use crate::commands::sorted_sets::{SortedAddOptions, SortedValue};
+use super::traits::ParseableCommand;
 use crate::types::RedisType;
 use std::vec::IntoIter;
 
@@ -10,9 +9,9 @@ pub struct ZRangeCommand {
     pub end: i64,
 }
 
-impl ZRangeCommand {
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
-        let key = command_utils::get_arg_as_string(args, "ZRANGE command requires a key")?;
+impl ParseableCommand for ZRangeCommand {
+    fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+        let key = Self::get_arg_as_string(args, "ZRANGE command requires a key")?;
 
         let start_arg = args
             .next()
@@ -30,7 +29,9 @@ impl ZRangeCommand {
 
         Ok(ZRangeCommand { key, start, end })
     }
+}
 
+impl ZRangeCommand {
     pub fn treat_bounds(&mut self, set_size: i64) -> Option<(usize, usize)> {
         if self.start >= set_size {
             return None;

@@ -1,4 +1,4 @@
-use super::command_utils;
+use super::traits::ParseableCommand;
 use crate::types::RedisType;
 use std::vec::IntoIter;
 
@@ -7,9 +7,9 @@ pub struct GetCommand {
     pub key: String,
 }
 
-impl GetCommand {
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
-        let key = command_utils::get_arg_as_string(args, "GET command requires a key")?;
+impl ParseableCommand for GetCommand {
+    fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+        let key = Self::get_arg_as_string(args, "GET command requires a key")?;
         Ok(GetCommand { key })
     }
 }

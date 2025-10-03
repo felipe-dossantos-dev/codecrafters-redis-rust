@@ -14,7 +14,10 @@ use crate::types::RedisType;
 pub struct RedisClient<T> {
     pub id: String,
     pub created_at: Instant,
+    // TODO - transformar num channel
+    // https://tokio.rs/tokio/tutorial/channels
     pub notifier: Arc<Notify>,
+    // TODO - transformar esse tcp_stream num connection para facilitar mockar
     pub tcp_stream: T,
 }
 

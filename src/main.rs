@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 mod client;
 mod commands;
+mod macros;
 mod server;
 mod store;
 mod types;

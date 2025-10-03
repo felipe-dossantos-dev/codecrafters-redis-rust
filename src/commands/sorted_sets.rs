@@ -132,8 +132,8 @@ impl RedisSortedSet {
         }
     }
 
-    /// Replace pelo nome, retorna a quantidade de itens inseridos
-    pub fn insert(&mut self, value: SortedValue) -> i64 {
+    /// Faz o insert caso não exista ou faz o replace caso exista, utiliza o member como chave, retorna a quantidade de itens inseridos
+    pub fn replace(&mut self, value: SortedValue) -> i64 {
         let mut count = 1;
         if let Some(old_value) = self.map.insert(value.member.clone(), value.clone()) {
             count = 0;
@@ -146,7 +146,7 @@ impl RedisSortedSet {
     /// Retorna o lugar no ranking do membro
     pub fn get_rank_by_member(&self, member: &String) -> Option<i64> {
         if let Some(value) = self.map.get(member) {
-            // TODO - slow
+            // TODO - slow, não vou mexer para não complicar no momento
             return self
                 .set
                 .iter()

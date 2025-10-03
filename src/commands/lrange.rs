@@ -1,4 +1,5 @@
-use super::command_utils;
+
+use super::traits::ParseableCommand;
 use crate::types::RedisType;
 use std::vec::IntoIter;
 
@@ -9,9 +10,9 @@ pub struct LRangeCommand {
     pub end: i64,
 }
 
-impl LRangeCommand {
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
-        let key = command_utils::get_arg_as_string(args, "LRANGE command requires a key")?;
+impl ParseableCommand for LRangeCommand {
+    fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+        let key = Self::get_arg_as_string(args, "LRANGE command requires a key")?;
 
         let start_arg = args
             .next()
@@ -29,7 +30,9 @@ impl LRangeCommand {
 
         Ok(LRangeCommand { key, start, end })
     }
+}
 
+impl LRangeCommand {
     pub fn treat_bounds(&mut self, list_len: i64) -> Option<(usize, usize)> {
         if self.start > list_len {
             return None;
