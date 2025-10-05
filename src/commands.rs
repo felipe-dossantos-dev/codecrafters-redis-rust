@@ -12,6 +12,7 @@ pub mod set;
 pub mod sorted_sets;
 pub mod traits;
 pub mod zadd;
+pub mod zcard;
 pub mod zrange;
 pub mod zrank;
 use crate::commands::traits::ParseableCommand;
@@ -27,7 +28,7 @@ use crate::{
         blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
         llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
         ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
-        zrange::ZRangeCommand, zrank::ZRankCommand,
+        zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand,
     },
     types::RedisType,
     utils,
@@ -48,6 +49,7 @@ pub enum RedisCommand {
     ZADD(ZAddCommand),
     ZRANK(ZRankCommand),
     ZRANGE(ZRangeCommand),
+    ZCARD(ZCardCommand),
 }
 
 // TODO - tentar implementar algo como uma linguagem para fazer o parse, algo declarativo
@@ -87,6 +89,7 @@ impl RedisCommand {
                         "ZADD" => (ZADD, ZAddCommand),
                         "ZRANK" => (ZRANK, ZRankCommand),
                         "ZRANGE" => (ZRANGE, ZRangeCommand),
+                        "ZCARD" => (ZCARD, ZCardCommand)
                     }
                 }
                 RedisType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
@@ -563,6 +566,20 @@ mod tests {
                 key: "sorted_set".to_string(),
                 start: 0,
                 end: 1
+            })])
+        );
+    }
+
+    #[test]
+    fn test_commands_build_zcard() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["ZCARD"])]);
+        assert_eq!(result, Err("ZCARD command requires a key".to_string()));
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["ZCARD", "zset_key"])]);
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::ZCARD(ZCardCommand {
+                key: "zset_key".to_string(),
             })])
         );
     }

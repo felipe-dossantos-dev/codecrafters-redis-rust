@@ -228,8 +228,8 @@ impl RedisServer {
                     };
 
                     // não é muito amigavel com a memória pq vai estar trazendo o Set inteiro transformado para a memória
-                    // mas para corrigir isso precisaria escrever cada mapeamento direto no client
-                    // o que dificultaria a arquitetura no momento, talvez no futuro mexo nisso
+                    // mas para corrigir isso precisaria escrever cada mapeamento feito direto no client
+                    // o que mudaria a arquitetura no momento, transformando em streams, talvez no futuro mexo nisso
                     let result_list = ss
                         .range(start, end)
                         .map(|v| RedisType::bulk_string(&v.member))
@@ -238,6 +238,12 @@ impl RedisServer {
                     return Some(RedisType::Array(result_list));
                 }
                 Some(RedisType::Array(vec![]))
+            }
+            RedisCommand::ZCARD(cmd) => {
+                if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
+                    return Some(RedisType::Integer(ss.len()));
+                }
+                Some(RedisType::Integer(0))
             }
         }
     }
@@ -294,6 +300,7 @@ mod tests {
         set::SetCommand,
         sorted_sets::{SortedAddOptions, SortedValue},
         zadd::ZAddCommand,
+        zcard::ZCardCommand,
         zrange::ZRangeCommand,
         zrank::ZRankCommand,
     };
@@ -1125,5 +1132,52 @@ mod tests {
                 RedisType::bulk_string("foo"),
             ]))
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_zcard() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+
+        let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
+            key: "zset_key".to_string(),
+            options: SortedAddOptions::new(),
+            values: vec![
+                SortedValue {
+                    score: 100.0,
+                    member: "foo".to_string(),
+                },
+                SortedValue {
+                    score: 100.0,
+                    member: "bar".to_string(),
+                },
+                SortedValue {
+                    score: 20.0,
+                    member: "baz".to_string(),
+                },
+                SortedValue {
+                    score: 30.1,
+                    member: "caz".to_string(),
+                },
+                SortedValue {
+                    score: 40.2,
+                    member: "paz".to_string(),
+                },
+            ],
+        });
+
+        RedisServer::handle_command(command, &client, &store).await;
+
+        let command = RedisCommand::ZCARD(ZCardCommand {
+            key: "other_key".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(0)));
+
+        let command = RedisCommand::ZCARD(ZCardCommand {
+            key: "zset_key".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(5)));
     }
 }
