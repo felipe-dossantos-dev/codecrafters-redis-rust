@@ -8,9 +8,9 @@ use std::{
 };
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::Mutex,
+    sync::{Mutex, Notify},
 };
 
 use crate::{
@@ -65,24 +65,21 @@ impl RedisServer {
         }
     }
 
-    async fn client_process<T>(mut client: RedisClient<T>, store: Arc<RedisStore>)
-    where
-        T: AsyncReadExt + AsyncWriteExt + Unpin + Send,
-    {
-        let mut buf = [0; 512];
-
+    async fn client_process<T: AsyncRead + AsyncWrite + Unpin + Send>(
+        mut client: RedisClient<T>,
+        store: Arc<RedisStore>,
+    ) {
         loop {
-            match client.tcp_stream.read(&mut buf).await {
-                Ok(0) => return,
-                Ok(n) => {
-                    let request = buf[0..n].to_vec();
+            match client.connection.read_request().await {
+                Ok(None) => break,
+                Ok(Some(request)) => {
                     let parsed_commands = RedisCommand::parse(request);
 
                     match parsed_commands {
                         Ok(received_commands) => {
                             for command in received_commands {
                                 let response = Self::handle_command(command, &client, &store).await;
-                                client.write_response(&response).await;
+                                client.connection.write_response(&response).await;
                                 println!(
                                     "Response Generated for client:{:?} {:?}",
                                     client.id, response
@@ -91,6 +88,7 @@ impl RedisServer {
                         }
                         Err(msg) => {
                             client
+                                .connection
                                 .write_response(&Some(RedisType::Error(msg.clone())))
                                 .await;
                             println!("Response Generated for client:{:?} {}", client.id, msg);
@@ -195,7 +193,7 @@ impl RedisServer {
                     );
                     match store
                         .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
-                        .await
+                        .await // client.notifier não existe mais no contexto
                     {
                         WaitResult::Timeout => {
                             return Some(RedisType::NullArray);
@@ -228,7 +226,7 @@ impl RedisServer {
                     };
 
                     // não é muito amigavel com a memória pq vai estar trazendo o Set inteiro transformado para a memória
-                    // mas para corrigir isso precisaria escrever cada mapeamento feito direto no client
+                    // mas para corrigir isso precisaria escrever a resposta cada mapeamento feito direto no client
                     // o que mudaria a arquitetura no momento, transformando em streams, talvez no futuro mexo nisso
                     let result_list = ss
                         .range(start, end)
@@ -308,8 +306,8 @@ mod tests {
     use crate::utils;
 
     fn new_client_for_test() -> (RedisClient<DuplexStream>, DuplexStream) {
-        let (client_stream, server_stream) = tokio::io::duplex(1024);
-        (RedisClient::new(client_stream), server_stream)
+        let (server_stream, client_stream) = tokio::io::duplex(1024);
+        (RedisClient::mock_new(server_stream), client_stream)
     }
 
     #[tokio::test]

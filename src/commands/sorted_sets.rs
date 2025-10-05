@@ -146,7 +146,7 @@ impl RedisSortedSet {
     /// Retorna o lugar no ranking do membro
     pub fn get_rank_by_member(&self, member: &String) -> Option<i64> {
         if let Some(value) = self.map.get(member) {
-            // TODO - slow, não vou mexer para não complicar no momento
+            // TODO - não escala muito bem mas não vou mexer para não complicar no momento
             return self
                 .set
                 .iter()
