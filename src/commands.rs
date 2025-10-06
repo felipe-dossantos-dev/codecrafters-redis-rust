@@ -15,8 +15,9 @@ pub mod zadd;
 pub mod zcard;
 pub mod zrange;
 pub mod zrank;
+pub mod zrem;
 pub mod zscore;
-use crate::commands::traits::ParseableCommand;
+use crate::commands::{traits::ParseableCommand, zscore::ZScoreCommand};
 
 use std::{
     time::{SystemTime, UNIX_EPOCH},
@@ -29,7 +30,7 @@ use crate::{
         blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
         llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
         ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
-        zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand, zscore::ZScoreCommand,
+        zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
     },
     types::RedisType,
     utils,
@@ -52,6 +53,7 @@ pub enum RedisCommand {
     ZRANGE(ZRangeCommand),
     ZCARD(ZCardCommand),
     ZSCORE(ZScoreCommand),
+    ZREM(ZRemCommand),
 }
 
 // TODO - tentar implementar algo como uma linguagem para fazer o parse, algo declarativo
@@ -92,7 +94,8 @@ impl RedisCommand {
                         "ZRANK" => (ZRANK, ZRankCommand),
                         "ZRANGE" => (ZRANGE, ZRangeCommand),
                         "ZCARD" => (ZCARD, ZCardCommand),
-                        "ZSCORE" => (ZSCORE, ZScoreCommand)
+                        "ZSCORE" => (ZSCORE, ZScoreCommand),
+                        "ZREM" => (ZREM, ZRemCommand)
                     }
                 }
                 RedisType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
@@ -604,6 +607,29 @@ mod tests {
         assert_eq!(
             result,
             Ok(vec![RedisCommand::ZSCORE(ZScoreCommand {
+                key: "sorted_set".to_string(),
+                member: "mykey".to_string()
+            })])
+        );
+    }
+
+    #[test]
+    fn test_commands_build_zrem() {
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrem"])]);
+        assert_eq!(result, Err("ZREM command requires a key".to_string()));
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrem", "sorted_set"])]);
+        assert_eq!(result, Err("ZREM command requires a member".to_string()));
+
+        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+            "zrem",
+            "sorted_set",
+            "mykey",
+        ])]);
+
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::ZREM(ZRemCommand {
                 key: "sorted_set".to_string(),
                 member: "mykey".to_string()
             })])

@@ -143,6 +143,16 @@ impl RedisSortedSet {
         return count;
     }
 
+    /// Remove pelo membro
+    pub fn remove_by_member(&mut self, member: &String) -> i64 {
+        let mut count = 0;
+        if let Some(old_value) = self.map.remove(member) {
+            count = 1;
+            self.set.remove(&old_value);
+        }
+        return count;
+    }
+
     /// Retorna o lugar no ranking do membro
     pub fn get_rank_by_member(&self, member: &String) -> Option<i64> {
         if let Some(value) = self.map.get(member) {

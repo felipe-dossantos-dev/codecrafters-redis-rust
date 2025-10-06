@@ -192,14 +192,14 @@ impl RedisServer {
                         (cmd.timeout * 1000.0) as u64 - elapsed as u64,
                     );
                     match store
-                                .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
-                                .await // client.notifier não existe mais no contexto
-                            {
-                                WaitResult::Timeout => {
-                                    return Some(RedisType::NullArray);
-                                }
-                                _ => {}
-                            };
+                        .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
+                        .await
+                    {
+                        WaitResult::Timeout => {
+                            return Some(RedisType::NullArray);
+                        }
+                        _ => {}
+                    };
                 }
             }
             RedisCommand::ZADD(cmd) => {
@@ -250,6 +250,13 @@ impl RedisServer {
                     }
                 }
                 Some(RedisType::Null)
+            }
+            RedisCommand::ZREM(cmd) => {
+                let value = store
+                    .get_sorted_set_by_key(&cmd.key)
+                    .await
+                    .remove_by_member(&cmd.member);
+                return Some(RedisType::Integer(value));
             }
         }
     }
@@ -309,6 +316,7 @@ mod tests {
         zcard::ZCardCommand,
         zrange::ZRangeCommand,
         zrank::ZRankCommand,
+        zrem::ZRemCommand,
         zscore::ZScoreCommand,
     };
     use crate::types::RedisType;
@@ -1242,5 +1250,49 @@ mod tests {
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
         assert_eq!(result, Some(RedisType::bulk_string("40.2")));
+    }
+
+    #[tokio::test]
+    async fn test_handle_zrem() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+
+        let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
+            key: "zset_key".to_string(),
+            options: SortedAddOptions::new(),
+            values: vec![
+                SortedValue {
+                    score: 100.0,
+                    member: "foo".to_string(),
+                },
+                SortedValue {
+                    score: 100.0,
+                    member: "bar".to_string(),
+                },
+            ],
+        });
+
+        RedisServer::handle_command(command, &client, &store).await;
+
+        let command = RedisCommand::ZREM(ZRemCommand {
+            key: "other_key".to_string(),
+            member: "foo".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(0)));
+
+        let command = RedisCommand::ZREM(ZRemCommand {
+            key: "zset_key".to_string(),
+            member: "other".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(0)));
+
+        let command = RedisCommand::ZREM(ZRemCommand {
+            key: "zset_key".to_string(),
+            member: "foo".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Integer(1)));
     }
 }
