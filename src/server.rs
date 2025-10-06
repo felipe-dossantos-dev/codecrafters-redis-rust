@@ -192,14 +192,14 @@ impl RedisServer {
                         (cmd.timeout * 1000.0) as u64 - elapsed as u64,
                     );
                     match store
-                        .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
-                        .await // client.notifier não existe mais no contexto
-                    {
-                        WaitResult::Timeout => {
-                            return Some(RedisType::NullArray);
-                        }
-                        _ => {}
-                    };
+                                .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
+                                .await // client.notifier não existe mais no contexto
+                            {
+                                WaitResult::Timeout => {
+                                    return Some(RedisType::NullArray);
+                                }
+                                _ => {}
+                            };
                 }
             }
             RedisCommand::ZADD(cmd) => {
@@ -242,6 +242,14 @@ impl RedisServer {
                     return Some(RedisType::Integer(ss.len()));
                 }
                 Some(RedisType::Integer(0))
+            }
+            RedisCommand::ZSCORE(cmd) => {
+                if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
+                    if let Some(value) = ss.get_score_by_member(&cmd.member) {
+                        return Some(RedisType::bulk_string(&value.to_string()));
+                    }
+                }
+                Some(RedisType::Null)
             }
         }
     }
@@ -301,6 +309,7 @@ mod tests {
         zcard::ZCardCommand,
         zrange::ZRangeCommand,
         zrank::ZRankCommand,
+        zscore::ZScoreCommand,
     };
     use crate::types::RedisType;
     use crate::utils;
@@ -1177,5 +1186,61 @@ mod tests {
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
         assert_eq!(result, Some(RedisType::Integer(5)));
+    }
+
+    #[tokio::test]
+    async fn test_handle_zscore() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+
+        let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
+            key: "zset_key".to_string(),
+            options: SortedAddOptions::new(),
+            values: vec![
+                SortedValue {
+                    score: 100.0,
+                    member: "foo".to_string(),
+                },
+                SortedValue {
+                    score: 100.0,
+                    member: "bar".to_string(),
+                },
+                SortedValue {
+                    score: 20.0,
+                    member: "baz".to_string(),
+                },
+                SortedValue {
+                    score: 30.1,
+                    member: "caz".to_string(),
+                },
+                SortedValue {
+                    score: 40.2,
+                    member: "paz".to_string(),
+                },
+            ],
+        });
+
+        RedisServer::handle_command(command, &client, &store).await;
+
+        let command = RedisCommand::ZSCORE(ZScoreCommand {
+            key: "other_key".to_string(),
+            member: "foo".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Null));
+
+        let command = RedisCommand::ZSCORE(ZScoreCommand {
+            key: "zset_key".to_string(),
+            member: "other".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::Null));
+
+        let command = RedisCommand::ZSCORE(ZScoreCommand {
+            key: "zset_key".to_string(),
+            member: "paz".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RedisType::bulk_string("40.2")));
     }
 }

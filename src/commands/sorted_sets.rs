@@ -163,4 +163,11 @@ impl RedisSortedSet {
     pub fn range(&self, start: usize, end: usize) -> Take<Skip<Iter<'_, SortedValue>>> {
         return self.set.iter().skip(start).take(end - start + 1);
     }
+
+    pub fn get_score_by_member(&self, member: &String) -> Option<f64> {
+        if let Some(value) = self.map.get(member) {
+            return Some(value.score);
+        }
+        None
+    }
 }
