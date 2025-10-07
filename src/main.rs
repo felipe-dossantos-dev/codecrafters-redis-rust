@@ -2,10 +2,11 @@
 mod client;
 mod commands;
 mod connection;
+mod datatypes;
 mod macros;
+mod resp;
 mod server;
 mod store;
-mod types;
 mod utils;
 
 use server::RedisServer;

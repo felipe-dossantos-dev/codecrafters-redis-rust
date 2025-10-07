@@ -6,8 +6,8 @@ use std::{
 
 use tokio::sync::{Mutex, MutexGuard, Notify, OwnedMutexGuard};
 
-use crate::commands::key_value::RedisKeyValue;
-use crate::commands::sorted_sets::{RedisSortedSet, SortedValue};
+use crate::datatypes::sorted_set::{RedisSortedSet, SortedValue};
+use crate::{commands::key_value::RedisKeyValue, datatypes::DataType};
 
 #[derive(Debug, PartialEq)]
 pub enum WaitResult {
@@ -17,7 +17,7 @@ pub enum WaitResult {
 
 #[derive(Debug)]
 pub struct RedisStore {
-    // TODO: criar uma estrutura de chaves únicas para depois criar transações por chave
+    pub keys: Mutex<HashMap<String, DataType>>,
     pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
     pub sorted_sets: Mutex<HashMap<String, RedisSortedSet>>,
@@ -31,6 +31,7 @@ pub struct RedisStore {
 impl RedisStore {
     pub fn new() -> Self {
         Self {
+            keys: Mutex::new(HashMap::new()),
             pairs: Mutex::new(HashMap::new()),
             lists: Mutex::new(HashMap::new()),
             sorted_sets: Mutex::new(HashMap::new()),

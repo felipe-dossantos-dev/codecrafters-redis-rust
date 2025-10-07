@@ -1,5 +1,5 @@
 use super::traits::ParseableCommand;
-use crate::types::RedisType;
+use crate::resp::RespDataType;
 use std::vec::IntoIter;
 
 
@@ -10,7 +10,7 @@ pub struct LPushCommand {
 }
 
 impl ParseableCommand for LPushCommand {
-    fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+    fn parse(args: &mut IntoIter<RespDataType>) -> Result<Self, String> {
         let key = Self::get_arg_as_string(args, "LPUSH command requires a key")?;
         let values: Vec<String> = args.filter_map(|t| t.to_string()).collect();
         if values.is_empty() {

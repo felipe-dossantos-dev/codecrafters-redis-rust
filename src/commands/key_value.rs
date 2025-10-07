@@ -2,7 +2,7 @@ use std::
     vec::IntoIter
 ;
 
-use crate::{types::RedisType, utils};
+use crate::{resp::RespDataType, utils};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct RedisKeyValue {
@@ -18,7 +18,7 @@ impl RedisKeyValue {
         false
     }
 
-    pub fn parse(args: &mut IntoIter<RedisType>) -> Result<Self, String> {
+    pub fn parse(args: &mut IntoIter<RespDataType>) -> Result<Self, String> {
         let value = args
             .next()
             .ok_or_else(|| "Expected a value for RedisKeyValue".to_string())?;

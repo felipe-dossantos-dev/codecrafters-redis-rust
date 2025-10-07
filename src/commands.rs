@@ -1,6 +1,7 @@
 pub mod blpop;
 pub mod echo;
 pub mod get;
+pub mod key_type;
 pub mod key_value;
 pub mod llen;
 pub mod lpop;
@@ -9,7 +10,6 @@ pub mod lrange;
 pub mod ping;
 pub mod rpush;
 pub mod set;
-pub mod sorted_sets;
 pub mod traits;
 pub mod zadd;
 pub mod zcard;
@@ -17,7 +17,7 @@ pub mod zrange;
 pub mod zrank;
 pub mod zrem;
 pub mod zscore;
-use crate::commands::{traits::ParseableCommand, zscore::ZScoreCommand};
+use crate::commands::{key_type::KeyTypeCommand, traits::ParseableCommand, zscore::ZScoreCommand};
 
 use std::{
     time::{SystemTime, UNIX_EPOCH},
@@ -32,7 +32,7 @@ use crate::{
         ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
         zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
     },
-    types::RedisType,
+    resp::RespDataType,
     utils,
 };
 
@@ -54,16 +54,17 @@ pub enum RedisCommand {
     ZCARD(ZCardCommand),
     ZSCORE(ZScoreCommand),
     ZREM(ZRemCommand),
+    TYPE(KeyTypeCommand),
 }
 
 // TODO - tentar implementar algo como uma linguagem para fazer o parse, algo declarativo
 // e que cuide se está valido a quantidade de argumentos e os valores dos argumentos
 impl RedisCommand {
-    pub fn build(values: Vec<RedisType>) -> Result<Vec<RedisCommand>, String> {
+    pub fn build(values: Vec<RespDataType>) -> Result<Vec<RedisCommand>, String> {
         let mut commands: Vec<RedisCommand> = Vec::new();
         for value in values {
             match value {
-                RedisType::Array(arr) => {
+                RespDataType::Array(arr) => {
                     if arr.is_empty() {
                         continue;
                     }
@@ -95,13 +96,14 @@ impl RedisCommand {
                         "ZRANGE" => (ZRANGE, ZRangeCommand),
                         "ZCARD" => (ZCARD, ZCardCommand),
                         "ZSCORE" => (ZSCORE, ZScoreCommand),
-                        "ZREM" => (ZREM, ZRemCommand)
+                        "ZREM" => (ZREM, ZRemCommand),
+                        "TYPE" => (TYPE, KeyTypeCommand),
                     }
                 }
-                RedisType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
+                RespDataType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
                     commands.push(RedisCommand::PING(PingCommand));
                 }
-                RedisType::SimpleString(s) if s.eq_ignore_ascii_case("PING") => {
+                RespDataType::SimpleString(s) if s.eq_ignore_ascii_case("PING") => {
                     commands.push(RedisCommand::PING(PingCommand));
                 }
                 _ => {
@@ -113,7 +115,7 @@ impl RedisCommand {
     }
 
     pub fn parse(values: Vec<u8>) -> Result<Vec<RedisCommand>, String> {
-        let received_values = RedisType::parse(values);
+        let received_values = RespDataType::parse(values);
         println!("Received values: {:?}", received_values);
 
         let received_commands = Self::build(received_values)?;
@@ -125,15 +127,15 @@ impl RedisCommand {
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::sorted_sets::{SortedAddOptions, SortedValue};
+    use crate::{commands::zadd::ZAddOptions, datatypes::sorted_set::SortedValue};
 
     use super::*;
 
     #[test]
     fn test_commands_build_ping() {
         let result = RedisCommand::build(vec![
-            RedisType::bulk_string("ping"),
-            RedisType::simple_string("ping"),
+            RespDataType::bulk_string("ping"),
+            RespDataType::simple_string("ping"),
         ]);
         assert_eq!(
             result,
@@ -146,7 +148,8 @@ mod tests {
 
     #[test]
     fn test_commands_build_echo() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["echo", "teste teste"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["echo", "teste teste"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::ECHO(EchoCommand {
@@ -157,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_get() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["get", "test"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["get", "test"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::GET(GetCommand {
@@ -168,7 +171,8 @@ mod tests {
 
     #[test]
     fn test_commands_build_set() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["set", "test", "test"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["set", "test", "test"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::SET(SetCommand {
@@ -183,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_set_with_px() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "set", "key", "value", "PX", "100",
         ])])
         .unwrap();
@@ -200,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_set_with_px_case_insensitive() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "set", "key", "value", "pX", "100",
         ])])
         .unwrap();
@@ -217,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_rpush() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "rpush", "mylist", "one", "two",
         ])]);
         assert_eq!(
@@ -231,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_lpush() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "Lpush", "mylist", "one", "two",
         ])]);
         assert_eq!(
@@ -245,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_llen() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["llen", "mylist"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["llen", "mylist"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::LLEN(LLenCommand {
@@ -256,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_commands_build_lpop() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["LPOP", "mylist"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::LPOP(LPopCommand {
@@ -265,7 +269,8 @@ mod tests {
             })])
         );
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["LPOP", "mylist", "2"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["LPOP", "mylist", "2"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::LPOP(LPopCommand {
@@ -277,14 +282,16 @@ mod tests {
 
     #[test]
     fn test_commands_build_blpop() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["bLPOP", "mylist"])]);
         assert_eq!(result, Err("timeout not found".to_string()));
 
-        let result =
-            RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist", "err"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
+            "bLPOP", "mylist", "err",
+        ])]);
         assert_eq!(result, Err("timeout is not a float".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["bLPOP", "mylist", "2"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["bLPOP", "mylist", "2"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::BLPOP(BLPopCommand {
@@ -297,12 +304,12 @@ mod tests {
     #[test]
     fn test_sorted_add_options_parse() {
         let mut args = vec![
-            RedisType::bulk_string("XX"),
-            RedisType::bulk_string("GT"),
-            RedisType::bulk_string("CH"),
+            RespDataType::bulk_string("XX"),
+            RespDataType::bulk_string("GT"),
+            RespDataType::bulk_string("CH"),
         ]
         .into_iter();
-        let options = SortedAddOptions::parse(&mut args);
+        let options = ZAddOptions::parse(&mut args);
         assert!(options.xx);
         assert!(options.gt);
         assert!(options.ch);
@@ -314,12 +321,12 @@ mod tests {
     #[test]
     fn test_sorted_add_options_parse_case_insensitive() {
         let mut args = vec![
-            RedisType::bulk_string("nx"),
-            RedisType::bulk_string("lt"),
-            RedisType::bulk_string("incr"),
+            RespDataType::bulk_string("nx"),
+            RespDataType::bulk_string("lt"),
+            RespDataType::bulk_string("incr"),
         ]
         .into_iter();
-        let options = SortedAddOptions::parse(&mut args);
+        let options = ZAddOptions::parse(&mut args);
         assert!(options.nx);
         assert!(options.lt);
         assert!(options.incr);
@@ -331,10 +338,10 @@ mod tests {
     #[test]
     fn test_sorted_value_parse() {
         let mut args = vec![
-            RedisType::bulk_string("10.5"),
-            RedisType::bulk_string("member1"),
-            RedisType::bulk_string("-1"),
-            RedisType::bulk_string("member2"),
+            RespDataType::bulk_string("10.5"),
+            RespDataType::bulk_string("member1"),
+            RespDataType::bulk_string("-1"),
+            RespDataType::bulk_string("member2"),
         ]
         .into_iter();
         let values = SortedValue::parse(&mut args).unwrap();
@@ -374,8 +381,8 @@ mod tests {
 
         // PX with no value
         let mut args = vec![
-            RedisType::bulk_string("value"),
-            RedisType::bulk_string("PX"),
+            RespDataType::bulk_string("value"),
+            RespDataType::bulk_string("PX"),
         ]
         .into_iter();
         assert_eq!(
@@ -385,9 +392,9 @@ mod tests {
 
         // PX with non-numeric value
         let mut args = vec![
-            RedisType::bulk_string("value"),
-            RedisType::bulk_string("PX"),
-            RedisType::bulk_string("abc"),
+            RespDataType::bulk_string("value"),
+            RespDataType::bulk_string("PX"),
+            RespDataType::bulk_string("abc"),
         ]
         .into_iter();
         assert!(RedisKeyValue::parse(&mut args)
@@ -402,13 +409,13 @@ mod tests {
         assert_eq!(SortedValue::parse(&mut args), None);
 
         // Odd number of args
-        let mut args = vec![RedisType::bulk_string("10.5")].into_iter();
+        let mut args = vec![RespDataType::bulk_string("10.5")].into_iter();
         assert_eq!(SortedValue::parse(&mut args), None);
 
         // Invalid score
         let mut args = vec![
-            RedisType::bulk_string("not-a-float"),
-            RedisType::bulk_string("member1"),
+            RespDataType::bulk_string("not-a-float"),
+            RespDataType::bulk_string("member1"),
         ]
         .into_iter();
         assert_eq!(SortedValue::parse(&mut args), None);
@@ -416,14 +423,14 @@ mod tests {
 
     #[test]
     fn test_commands_build_zadd() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zadd", "myzset", "1", "one", "2", "two",
         ])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::ZADD(ZAddCommand {
                 key: "myzset".to_string(),
-                options: SortedAddOptions {
+                options: ZAddOptions {
                     xx: false,
                     nx: false,
                     lt: false,
@@ -447,14 +454,14 @@ mod tests {
 
     #[test]
     fn test_commands_build_zadd_with_options() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zadd", "myzset", "NX", "CH", "1", "one",
         ])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::ZADD(ZAddCommand {
                 key: "myzset".to_string(),
-                options: SortedAddOptions {
+                options: ZAddOptions {
                     xx: false,
                     nx: true,
                     lt: false,
@@ -473,18 +480,19 @@ mod tests {
     #[test]
     fn test_commands_build_errors() {
         // RPUSH with no values
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["rpush", "mylist"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["rpush", "mylist"])]);
         assert_eq!(result, Err("RPUSH requires at least one value".to_string()));
 
         // LRANGE with missing args
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["lrange", "mylist", "0"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["lrange", "mylist", "0"])]);
         assert_eq!(
             result,
             Err("Expected values for LRANGE start and end".to_string())
         );
 
         // LRANGE with non-integer args
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "lrange", "mylist", "a", "b",
         ])]);
         assert_eq!(
@@ -495,13 +503,14 @@ mod tests {
 
     #[test]
     fn test_commands_build_zrank() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrank"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["zrank"])]);
         assert_eq!(result, Err("ZADD command requires a key".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zRank", "sorted_set"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["zRank", "sorted_set"])]);
         assert_eq!(result, Err("ZADD command requires a member".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "Zrank",
             "sorted_set",
             "mykey",
@@ -518,16 +527,17 @@ mod tests {
 
     #[test]
     fn test_commands_build_zrange() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrange"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["zrange"])]);
         assert_eq!(result, Err("ZRANGE command requires a key".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zRange", "sorted_set"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["zRange", "sorted_set"])]);
         assert_eq!(
             result,
             Err("Expected values for ZRANGE start and end".to_string())
         );
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zRange",
             "sorted_set",
             "A",
@@ -537,7 +547,7 @@ mod tests {
             Err("Expected values for ZRANGE start and end".to_string())
         );
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zRange",
             "sorted_set",
             "A",
@@ -548,7 +558,7 @@ mod tests {
             Err("Expected integer values for ZRANGE start and end".to_string())
         );
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zRange",
             "sorted_set",
             "1",
@@ -559,7 +569,7 @@ mod tests {
             Err("Expected integer values for ZRANGE start and end".to_string())
         );
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zRange",
             "sorted_set",
             "0",
@@ -578,10 +588,10 @@ mod tests {
 
     #[test]
     fn test_commands_build_zcard() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["ZCARD"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["ZCARD"])]);
         assert_eq!(result, Err("ZCARD command requires a key".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["ZCARD", "zset_key"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["ZCARD", "zset_key"])]);
         assert_eq!(
             result,
             Ok(vec![RedisCommand::ZCARD(ZCardCommand {
@@ -592,13 +602,14 @@ mod tests {
 
     #[test]
     fn test_commands_build_zscore() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zscore"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["zscore"])]);
         assert_eq!(result, Err("ZSCORE command requires a key".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zscore", "sorted_set"])]);
+        let result =
+            RedisCommand::build(vec![RespDataType::new_array(vec!["zscore", "sorted_set"])]);
         assert_eq!(result, Err("ZSCORE command requires a member".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zscore",
             "sorted_set",
             "mykey",
@@ -615,13 +626,13 @@ mod tests {
 
     #[test]
     fn test_commands_build_zrem() {
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrem"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["zrem"])]);
         assert_eq!(result, Err("ZREM command requires a key".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec!["zrem", "sorted_set"])]);
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["zrem", "sorted_set"])]);
         assert_eq!(result, Err("ZREM command requires a member".to_string()));
 
-        let result = RedisCommand::build(vec![RedisType::new_array(vec![
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
             "zrem",
             "sorted_set",
             "mykey",
@@ -632,6 +643,21 @@ mod tests {
             Ok(vec![RedisCommand::ZREM(ZRemCommand {
                 key: "sorted_set".to_string(),
                 member: "mykey".to_string()
+            })])
+        );
+    }
+
+    #[test]
+    fn test_commands_build_type() {
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["type"])]);
+        assert_eq!(result, Err("TYPE command requires a key".to_string()));
+
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["type", "sorted_set"])]);
+
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::TYPE(KeyTypeCommand {
+                key: "sorted_set".to_string(),
             })])
         );
     }

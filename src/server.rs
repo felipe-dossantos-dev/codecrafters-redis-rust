@@ -15,13 +15,10 @@ use tokio::{
 
 use crate::{
     client::RedisClient,
-    commands::{
-        sorted_sets::{RedisSortedSet, SortedAddOptions, SortedValue},
-        zadd::ZAddCommand,
-        RedisCommand,
-    },
+    commands::{zadd::ZAddCommand, RedisCommand},
+    datatypes::DataType,
+    resp::RespDataType,
     store::{RedisStore, WaitResult},
-    types::RedisType,
     utils,
 };
 
@@ -89,7 +86,7 @@ impl RedisServer {
                         Err(msg) => {
                             client
                                 .connection
-                                .write_response(&Some(RedisType::Error(msg.clone())))
+                                .write_response(&Some(RespDataType::Error(msg.clone())))
                                 .await;
                             println!("Response Generated for client:{:?} {}", client.id, msg);
                         }
@@ -107,21 +104,26 @@ impl RedisServer {
         command: RedisCommand,
         client: &RedisClient<impl AsyncReadExt + AsyncWriteExt + Unpin + Send>,
         store: &Arc<RedisStore>,
-    ) -> Option<RedisType> {
+    ) -> Option<RespDataType> {
         match command {
             RedisCommand::GET(cmd) => {
                 let response = match store.pairs.lock().await.get(&cmd.key.to_string()) {
-                    Some(val) if !val.is_expired() => RedisType::bulk_string(&val.value),
-                    _ => RedisType::Null,
+                    Some(val) if !val.is_expired() => RespDataType::bulk_string(&val.value),
+                    _ => RespDataType::Null,
                 };
                 Some(response)
             }
             RedisCommand::SET(cmd) => {
-                store.pairs.lock().await.insert(cmd.key, cmd.value);
-                Some(RedisType::ok())
+                store.pairs.lock().await.insert(cmd.key.clone(), cmd.value);
+                store
+                    .keys
+                    .lock()
+                    .await
+                    .insert(cmd.key.clone(), DataType::String);
+                Some(RespDataType::ok())
             }
-            RedisCommand::PING(_) => Some(RedisType::pong()),
-            RedisCommand::ECHO(cmd) => Some(RedisType::bulk_string(&cmd.message)),
+            RedisCommand::PING(_) => Some(RespDataType::pong()),
+            RedisCommand::ECHO(cmd) => Some(RespDataType::bulk_string(&cmd.message)),
             RedisCommand::RPUSH(cmd) => {
                 let mut lists_guard = store.lists.lock().await;
                 let list = lists_guard
@@ -133,7 +135,7 @@ impl RedisServer {
                 list.extend(cmd.values);
                 let len = list.len() as i64;
 
-                Some(RedisType::Integer(len))
+                Some(RespDataType::Integer(len))
             }
             RedisCommand::LPUSH(cmd) => {
                 let mut lists_guard = store.lists.lock().await;
@@ -147,45 +149,48 @@ impl RedisServer {
                     list.insert(0, value.clone());
                 }
                 let len = list.len() as i64;
-                Some(RedisType::Integer(len))
+                Some(RespDataType::Integer(len))
             }
             RedisCommand::LRANGE(mut cmd) => {
                 if let Some(list_value) = store.lists.lock().await.get(&cmd.key.to_string()) {
                     let list_len = list_value.len() as i64;
                     let (start, end) = match cmd.treat_bounds(list_len) {
                         Some(value) => value,
-                        None => return Some(RedisType::Array(vec![])),
+                        None => return Some(RespDataType::Array(vec![])),
                     };
 
-                    let mut result_list: Vec<RedisType> = Vec::new();
+                    let mut result_list: Vec<RespDataType> = Vec::new();
 
                     for i in start..=end {
-                        result_list.push(RedisType::bulk_string(&list_value[i]));
+                        result_list.push(RespDataType::bulk_string(&list_value[i]));
                     }
-                    return Some(RedisType::Array(result_list));
+                    return Some(RespDataType::Array(result_list));
                 }
-                Some(RedisType::Array(vec![]))
+                Some(RespDataType::Array(vec![]))
             }
             RedisCommand::LLEN(cmd) => {
                 let mut lists_guard = store.lists.lock().await;
                 let list = lists_guard.entry(cmd.key).or_insert_with(VecDeque::new);
                 let len = list.len() as i64;
-                Some(RedisType::Integer(len))
+                Some(RespDataType::Integer(len))
             }
             RedisCommand::LPOP(cmd) => lpop(&store.lists, cmd.key, cmd.count).await,
             RedisCommand::BLPOP(cmd) => {
                 let start_time = utils::now_millis();
                 loop {
                     let lpop_result = lpop(&store.lists, cmd.key.clone(), 1).await;
-                    if !matches!(lpop_result, Some(RedisType::Null)) {
+                    if !matches!(lpop_result, Some(RespDataType::Null)) {
                         return lpop_result.map(|val| {
-                            RedisType::Array(vec![RedisType::bulk_string(cmd.key.as_str()), val])
+                            RespDataType::Array(vec![
+                                RespDataType::bulk_string(cmd.key.as_str()),
+                                val,
+                            ])
                         });
                     }
 
                     let elapsed = utils::now_millis() - start_time;
                     if cmd.timeout > 0.0 && elapsed >= (cmd.timeout * 1000.0) as u128 {
-                        return Some(RedisType::NullArray);
+                        return Some(RespDataType::NullArray);
                     }
 
                     let remaining_timeout = std::time::Duration::from_millis(
@@ -196,7 +201,7 @@ impl RedisServer {
                         .await
                     {
                         WaitResult::Timeout => {
-                            return Some(RedisType::NullArray);
+                            return Some(RespDataType::NullArray);
                         }
                         _ => {}
                     };
@@ -209,20 +214,20 @@ impl RedisServer {
                     let count = ss.replace(value);
                     added += count;
                 }
-                Some(RedisType::Integer(added))
+                Some(RespDataType::Integer(added))
             }
             RedisCommand::ZRANK(cmd) => {
                 let ss = store.get_sorted_set_by_key(&cmd.key).await;
                 match ss.get_rank_by_member(&cmd.member) {
-                    Some(val) => Some(RedisType::Integer(val)),
-                    None => Some(RedisType::Null),
+                    Some(val) => Some(RespDataType::Integer(val)),
+                    None => Some(RespDataType::Null),
                 }
             }
             RedisCommand::ZRANGE(mut cmd) => {
                 if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
                     let (start, end) = match cmd.treat_bounds(ss.len()) {
                         Some(value) => value,
-                        None => return Some(RedisType::Array(vec![])),
+                        None => return Some(RespDataType::Array(vec![])),
                     };
 
                     // não é muito amigavel com a memória pq vai estar trazendo o Set inteiro transformado para a memória
@@ -230,34 +235,38 @@ impl RedisServer {
                     // o que mudaria a arquitetura no momento, transformando em streams, talvez no futuro mexo nisso
                     let result_list = ss
                         .range(start, end)
-                        .map(|v| RedisType::bulk_string(&v.member))
+                        .map(|v| RespDataType::bulk_string(&v.member))
                         .collect();
 
-                    return Some(RedisType::Array(result_list));
+                    return Some(RespDataType::Array(result_list));
                 }
-                Some(RedisType::Array(vec![]))
+                Some(RespDataType::Array(vec![]))
             }
             RedisCommand::ZCARD(cmd) => {
                 if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
-                    return Some(RedisType::Integer(ss.len()));
+                    return Some(RespDataType::Integer(ss.len()));
                 }
-                Some(RedisType::Integer(0))
+                Some(RespDataType::Integer(0))
             }
             RedisCommand::ZSCORE(cmd) => {
                 if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
                     if let Some(value) = ss.get_score_by_member(&cmd.member) {
-                        return Some(RedisType::bulk_string(&value.to_string()));
+                        return Some(RespDataType::bulk_string(&value.to_string()));
                     }
                 }
-                Some(RedisType::Null)
+                Some(RespDataType::Null)
             }
             RedisCommand::ZREM(cmd) => {
                 let value = store
                     .get_sorted_set_by_key(&cmd.key)
                     .await
                     .remove_by_member(&cmd.member);
-                return Some(RedisType::Integer(value));
+                return Some(RespDataType::Integer(value));
             }
+            RedisCommand::TYPE(cmd) => match store.keys.lock().await.get(&cmd.key) {
+                Some(tp) => Some(tp.to_resp()),
+                None => Some(DataType::None.to_resp()),
+            },
         }
     }
 }
@@ -266,15 +275,15 @@ async fn lpop(
     lists: &Mutex<HashMap<String, VecDeque<String>>>,
     key: String,
     count: i64,
-) -> Option<RedisType> {
+) -> Option<RespDataType> {
     let mut lists_guard = lists.lock().await;
     let list = lists_guard.entry(key);
     match list {
         Occupied(mut occupied_entry) => {
-            let mut popped_elements: Vec<RedisType> = Vec::new();
+            let mut popped_elements: Vec<RespDataType> = Vec::new();
             for _i in 0..count {
                 if let Some(val) = occupied_entry.get_mut().pop_front() {
-                    popped_elements.push(RedisType::bulk_string(val.as_str()));
+                    popped_elements.push(RespDataType::bulk_string(val.as_str()));
                 } else {
                     break;
                 }
@@ -282,11 +291,11 @@ async fn lpop(
             if count == 1 && !popped_elements.is_empty() {
                 return Some(popped_elements.remove(0));
             } else if count > 1 {
-                return Some(RedisType::Array(popped_elements));
+                return Some(RespDataType::Array(popped_elements));
             }
-            Some(RedisType::Null)
+            Some(RespDataType::Null)
         }
-        Vacant(_) => Some(RedisType::Null),
+        Vacant(_) => Some(RespDataType::Null),
     }
 }
 
@@ -299,27 +308,17 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
+    use crate::commands::key_type::KeyTypeCommand;
+    use crate::commands::zadd::ZAddOptions;
     use crate::commands::{
-        blpop::BLPopCommand,
-        echo::EchoCommand,
-        get::GetCommand,
-        key_value::RedisKeyValue,
-        llen::LLenCommand,
-        lpop::LPopCommand,
-        lpush::LPushCommand,
-        lrange::LRangeCommand,
-        ping::PingCommand,
-        rpush::RPushCommand,
-        set::SetCommand,
-        sorted_sets::{SortedAddOptions, SortedValue},
-        zadd::ZAddCommand,
-        zcard::ZCardCommand,
-        zrange::ZRangeCommand,
-        zrank::ZRankCommand,
-        zrem::ZRemCommand,
+        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
+        llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
+        ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
+        zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
         zscore::ZScoreCommand,
     };
-    use crate::types::RedisType;
+    use crate::datatypes::sorted_set::SortedValue;
+    use crate::resp::RespDataType;
     use crate::utils;
 
     fn new_client_for_test() -> (RedisClient<DuplexStream>, DuplexStream) {
@@ -340,7 +339,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Integer(2));
+        assert_eq!(result, RespDataType::Integer(2));
         let lists_guard = store.lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
@@ -361,7 +360,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Integer(2));
+        assert_eq!(result, RespDataType::Integer(2));
         let lists_guard = store.lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
@@ -388,7 +387,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Integer(3));
+        assert_eq!(result, RespDataType::Integer(3));
         let lists_guard = store.lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
@@ -419,7 +418,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Integer(3));
+        assert_eq!(result, RespDataType::Integer(3));
         let lists_guard = store.lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist"),
@@ -445,7 +444,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Array(vec![]));
+        assert_eq!(result, RespDataType::Array(vec![]));
     }
 
     #[tokio::test]
@@ -468,7 +467,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Array(vec![]));
+        assert_eq!(result, RespDataType::Array(vec![]));
     }
 
     #[tokio::test]
@@ -492,10 +491,10 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![
-                RedisType::bulk_string("one"),
-                RedisType::bulk_string("two"),
-                RedisType::bulk_string("three"),
+            RespDataType::Array(vec![
+                RespDataType::bulk_string("one"),
+                RespDataType::bulk_string("two"),
+                RespDataType::bulk_string("three"),
             ])
         );
     }
@@ -526,9 +525,9 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![
-                RedisType::bulk_string("d"),
-                RedisType::bulk_string("e"),
+            RespDataType::Array(vec![
+                RespDataType::bulk_string("d"),
+                RespDataType::bulk_string("e"),
             ])
         );
 
@@ -544,10 +543,10 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![
-                RedisType::bulk_string("a"),
-                RedisType::bulk_string("b"),
-                RedisType::bulk_string("c"),
+            RespDataType::Array(vec![
+                RespDataType::bulk_string("a"),
+                RespDataType::bulk_string("b"),
+                RespDataType::bulk_string("c"),
             ])
         );
 
@@ -563,12 +562,12 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![
-                RedisType::bulk_string("a"),
-                RedisType::bulk_string("b"),
-                RedisType::bulk_string("c"),
-                RedisType::bulk_string("d"),
-                RedisType::bulk_string("e"),
+            RespDataType::Array(vec![
+                RespDataType::bulk_string("a"),
+                RespDataType::bulk_string("b"),
+                RespDataType::bulk_string("c"),
+                RespDataType::bulk_string("d"),
+                RespDataType::bulk_string("e"),
             ])
         );
     }
@@ -595,7 +594,7 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![RedisType::bulk_string("one")])
+            RespDataType::Array(vec![RespDataType::bulk_string("one")])
         );
     }
 
@@ -619,7 +618,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Array(vec![]));
+        assert_eq!(result, RespDataType::Array(vec![]));
     }
 
     #[tokio::test]
@@ -640,7 +639,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Integer(1));
+        assert_eq!(result, RespDataType::Integer(1));
     }
 
     #[tokio::test]
@@ -664,7 +663,7 @@ mod tests {
         let result = RedisServer::handle_command(command, &client, &store)
             .await
             .unwrap();
-        assert_eq!(result, RedisType::bulk_string("1"));
+        assert_eq!(result, RespDataType::bulk_string("1"));
         let lists_guard = store.lists.lock().await;
         assert_eq!(
             lists_guard.get("mylist").unwrap(),
@@ -696,9 +695,9 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![
-                RedisType::bulk_string("1"),
-                RedisType::bulk_string("2")
+            RespDataType::Array(vec![
+                RespDataType::bulk_string("1"),
+                RespDataType::bulk_string("2")
             ])
         );
         let lists_guard = store.lists.lock().await;
@@ -718,7 +717,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::pong());
+        assert_eq!(result, RespDataType::pong());
     }
 
     #[tokio::test]
@@ -733,7 +732,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::bulk_string("hello world"));
+        assert_eq!(result, RespDataType::bulk_string("hello world"));
     }
 
     #[tokio::test]
@@ -746,7 +745,7 @@ mod tests {
         let get_result = RedisServer::handle_command(get_command, &client, &store)
             .await
             .unwrap();
-        assert_eq!(get_result, RedisType::Null);
+        assert_eq!(get_result, RespDataType::Null);
     }
 
     #[tokio::test]
@@ -767,7 +766,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::bulk_string("myvalue"));
+        assert_eq!(result, RespDataType::bulk_string("myvalue"));
     }
 
     #[tokio::test]
@@ -788,7 +787,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::Null);
+        assert_eq!(result, RespDataType::Null);
     }
 
     #[tokio::test]
@@ -809,7 +808,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::ok());
+        assert_eq!(result, RespDataType::ok());
         let pairs_guard = store.pairs.lock().await;
         let stored_value = pairs_guard.get(&key).unwrap();
         assert_eq!(stored_value.value, "myvalue");
@@ -834,7 +833,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, RedisType::ok());
+        assert_eq!(result, RespDataType::ok());
         let pairs_guard = store.pairs.lock().await;
         let stored_value = pairs_guard.get(&key).unwrap();
         assert_eq!(stored_value.value, "myvalue");
@@ -845,14 +844,14 @@ mod tests {
     async fn test_lpop_non_existent_key() {
         let lists = Mutex::new(HashMap::new());
         let result = lpop(&lists, "no-such-key".to_string(), 1).await;
-        assert_eq!(result, Some(RedisType::Null));
+        assert_eq!(result, Some(RespDataType::Null));
     }
 
     #[tokio::test]
     async fn test_lpop_empty_list() {
         let lists = Mutex::new(HashMap::from([("empty-list".to_string(), VecDeque::new())]));
         let result = lpop(&lists, "empty-list".to_string(), 1).await;
-        assert_eq!(result, Some(RedisType::Null));
+        assert_eq!(result, Some(RespDataType::Null));
     }
 
     #[tokio::test]
@@ -864,7 +863,7 @@ mod tests {
         let result = lpop(&lists, "mylist".to_string(), 2).await;
         assert_eq!(
             result,
-            Some(RedisType::Array(vec![RedisType::bulk_string("one")]))
+            Some(RespDataType::Array(vec![RespDataType::bulk_string("one")]))
         );
         let lists_guard = lists.lock().await;
         assert!(lists_guard.get("mylist").unwrap().is_empty());
@@ -890,9 +889,9 @@ mod tests {
 
         assert_eq!(
             result,
-            RedisType::Array(vec![
-                RedisType::bulk_string("myblist"),
-                RedisType::bulk_string("one")
+            RespDataType::Array(vec![
+                RespDataType::bulk_string("myblist"),
+                RespDataType::bulk_string("one")
             ])
         );
     }
@@ -913,7 +912,7 @@ mod tests {
             .unwrap();
         let duration = start.elapsed();
 
-        assert_eq!(result, RedisType::NullArray);
+        assert_eq!(result, RespDataType::NullArray);
         assert!(duration >= Duration::from_secs_f64(timeout_secs));
     }
 
@@ -952,9 +951,9 @@ mod tests {
 
         assert_eq!(
             blpop_result,
-            RedisType::Array(vec![
-                RedisType::bulk_string(&key),
-                RedisType::bulk_string("value1")
+            RespDataType::Array(vec![
+                RespDataType::bulk_string(&key),
+                RespDataType::bulk_string("value1")
             ])
         );
     }
@@ -966,7 +965,7 @@ mod tests {
 
         let command = RedisCommand::ZADD(ZAddCommand {
             key: "mylist".to_string(),
-            options: SortedAddOptions::new(),
+            options: ZAddOptions::new(),
             values: vec![
                 SortedValue {
                     member: "1".to_string(),
@@ -985,7 +984,7 @@ mod tests {
 
         let result = RedisServer::handle_command(command, &client, &store).await;
 
-        assert_eq!(result, Some(RedisType::Integer(2)));
+        assert_eq!(result, Some(RespDataType::Integer(2)));
     }
 
     #[tokio::test]
@@ -995,7 +994,7 @@ mod tests {
 
         let command = RedisCommand::ZADD(ZAddCommand {
             key: "zset_key".to_string(),
-            options: SortedAddOptions::new(),
+            options: ZAddOptions::new(),
             values: vec![
                 SortedValue {
                     score: 100.0,
@@ -1027,35 +1026,35 @@ mod tests {
             member: "caz".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Null));
+        assert_eq!(result, Some(RespDataType::Null));
 
         let command = RedisCommand::ZRANK(ZRankCommand {
             key: "zset_key".to_string(),
             member: "caz".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(1)));
+        assert_eq!(result, Some(RespDataType::Integer(1)));
 
         let command = RedisCommand::ZRANK(ZRankCommand {
             key: "zset_key".to_string(),
             member: "baz".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(0)));
+        assert_eq!(result, Some(RespDataType::Integer(0)));
 
         let command = RedisCommand::ZRANK(ZRankCommand {
             key: "zset_key".to_string(),
             member: "foo".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(4)));
+        assert_eq!(result, Some(RespDataType::Integer(4)));
 
         let command = RedisCommand::ZRANK(ZRankCommand {
             key: "zset_key".to_string(),
             member: "bar".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(3)));
+        assert_eq!(result, Some(RespDataType::Integer(3)));
     }
 
     #[tokio::test]
@@ -1065,7 +1064,7 @@ mod tests {
 
         let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
             key: "zset_key".to_string(),
-            options: SortedAddOptions::new(),
+            options: ZAddOptions::new(),
             values: vec![
                 SortedValue {
                     score: 100.0,
@@ -1098,7 +1097,7 @@ mod tests {
             end: 1,
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Array(vec![])));
+        assert_eq!(result, Some(RespDataType::Array(vec![])));
 
         let command = RedisCommand::ZRANGE(ZRangeCommand {
             key: "zset_key".to_string(),
@@ -1106,7 +1105,7 @@ mod tests {
             end: 11,
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Array(vec![])));
+        assert_eq!(result, Some(RespDataType::Array(vec![])));
 
         let command = RedisCommand::ZRANGE(ZRangeCommand {
             key: "zset_key".to_string(),
@@ -1114,7 +1113,7 @@ mod tests {
             end: 2,
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Array(vec![])));
+        assert_eq!(result, Some(RespDataType::Array(vec![])));
 
         let command = RedisCommand::ZRANGE(ZRangeCommand {
             key: "zset_key".to_string(),
@@ -1124,12 +1123,12 @@ mod tests {
         let result = RedisServer::handle_command(command, &client, &store).await;
         assert_eq!(
             result,
-            Some(RedisType::Array(vec![
-                RedisType::bulk_string("baz"),
-                RedisType::bulk_string("caz"),
-                RedisType::bulk_string("paz"),
-                RedisType::bulk_string("bar"),
-                RedisType::bulk_string("foo"),
+            Some(RespDataType::Array(vec![
+                RespDataType::bulk_string("baz"),
+                RespDataType::bulk_string("caz"),
+                RespDataType::bulk_string("paz"),
+                RespDataType::bulk_string("bar"),
+                RespDataType::bulk_string("foo"),
             ]))
         );
 
@@ -1141,10 +1140,10 @@ mod tests {
         let result = RedisServer::handle_command(command, &client, &store).await;
         assert_eq!(
             result,
-            Some(RedisType::Array(vec![
-                RedisType::bulk_string("paz"),
-                RedisType::bulk_string("bar"),
-                RedisType::bulk_string("foo"),
+            Some(RespDataType::Array(vec![
+                RespDataType::bulk_string("paz"),
+                RespDataType::bulk_string("bar"),
+                RespDataType::bulk_string("foo"),
             ]))
         );
     }
@@ -1156,7 +1155,7 @@ mod tests {
 
         let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
             key: "zset_key".to_string(),
-            options: SortedAddOptions::new(),
+            options: ZAddOptions::new(),
             values: vec![
                 SortedValue {
                     score: 100.0,
@@ -1187,13 +1186,13 @@ mod tests {
             key: "other_key".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(0)));
+        assert_eq!(result, Some(RespDataType::Integer(0)));
 
         let command = RedisCommand::ZCARD(ZCardCommand {
             key: "zset_key".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(5)));
+        assert_eq!(result, Some(RespDataType::Integer(5)));
     }
 
     #[tokio::test]
@@ -1203,7 +1202,7 @@ mod tests {
 
         let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
             key: "zset_key".to_string(),
-            options: SortedAddOptions::new(),
+            options: ZAddOptions::new(),
             values: vec![
                 SortedValue {
                     score: 100.0,
@@ -1235,21 +1234,21 @@ mod tests {
             member: "foo".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Null));
+        assert_eq!(result, Some(RespDataType::Null));
 
         let command = RedisCommand::ZSCORE(ZScoreCommand {
             key: "zset_key".to_string(),
             member: "other".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Null));
+        assert_eq!(result, Some(RespDataType::Null));
 
         let command = RedisCommand::ZSCORE(ZScoreCommand {
             key: "zset_key".to_string(),
             member: "paz".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::bulk_string("40.2")));
+        assert_eq!(result, Some(RespDataType::bulk_string("40.2")));
     }
 
     #[tokio::test]
@@ -1259,7 +1258,7 @@ mod tests {
 
         let command: RedisCommand = RedisCommand::ZADD(ZAddCommand {
             key: "zset_key".to_string(),
-            options: SortedAddOptions::new(),
+            options: ZAddOptions::new(),
             values: vec![
                 SortedValue {
                     score: 100.0,
@@ -1279,20 +1278,49 @@ mod tests {
             member: "foo".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(0)));
+        assert_eq!(result, Some(RespDataType::Integer(0)));
 
         let command = RedisCommand::ZREM(ZRemCommand {
             key: "zset_key".to_string(),
             member: "other".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(0)));
+        assert_eq!(result, Some(RespDataType::Integer(0)));
 
         let command = RedisCommand::ZREM(ZRemCommand {
             key: "zset_key".to_string(),
             member: "foo".to_string(),
         });
         let result = RedisServer::handle_command(command, &client, &store).await;
-        assert_eq!(result, Some(RedisType::Integer(1)));
+        assert_eq!(result, Some(RespDataType::Integer(1)));
+    }
+
+    #[tokio::test]
+    async fn test_handle_type() {
+        let (client, _server_stream) = new_client_for_test();
+        let store = Arc::new(RedisStore::new());
+        let command = RedisCommand::SET(SetCommand {
+            key: "key".to_string(),
+            value: RedisKeyValue {
+                value: "Value".to_string(),
+                expired_at_millis: None,
+            },
+        });
+
+        RedisServer::handle_command(command, &client, &store)
+            .await
+            .unwrap();
+
+        let command = RedisCommand::TYPE(KeyTypeCommand {
+            key: "zset_key".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RespDataType::simple_string("none")));
+
+        let command = RedisCommand::TYPE(KeyTypeCommand {
+            key: "key".to_string(),
+        });
+        let result = RedisServer::handle_command(command, &client, &store).await;
+        assert_eq!(result, Some(RespDataType::simple_string("string")));
     }
 }

@@ -1,6 +1,6 @@
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::types::RedisType;
+use crate::resp::RespDataType;
 
 const BUFFER_SIZE: usize = 512;
 
@@ -26,10 +26,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<T> {
         }
     }
 
-    pub async fn write_response(&mut self, value: &Option<RedisType>) {
+    pub async fn write_response(&mut self, value: &Option<RespDataType>) {
         let response_bytes = match value {
             Some(val) => val.serialize(),
-            None => RedisType::Null.serialize(),
+            None => RespDataType::Null.serialize(),
         };
 
         if self.stream.write_all(&response_bytes).await.is_err() {
