@@ -6,8 +6,11 @@ use std::{
 
 use tokio::sync::{Mutex, MutexGuard, Notify, OwnedMutexGuard};
 
-use crate::datatypes::sorted_set::{RedisSortedSet, SortedValue};
-use crate::{commands::key_value::RedisKeyValue, datatypes::DataType};
+use crate::values::RedisValue;
+use crate::values::{
+    key_value::KeyValue,
+    sorted_set::{SortedSet, SortedValue},
+};
 
 #[derive(Debug, PartialEq)]
 pub enum WaitResult {
@@ -17,10 +20,10 @@ pub enum WaitResult {
 
 #[derive(Debug)]
 pub struct RedisStore {
-    pub keys: Mutex<HashMap<String, DataType>>,
-    pub pairs: Mutex<HashMap<String, RedisKeyValue>>,
+    pub keys: Mutex<HashMap<String, RedisValue>>,
+    pub pairs: Mutex<HashMap<String, KeyValue>>,
     pub lists: Mutex<HashMap<String, VecDeque<String>>>,
-    pub sorted_sets: Mutex<HashMap<String, RedisSortedSet>>,
+    pub sorted_sets: Mutex<HashMap<String, SortedSet>>,
     // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
     // pode dar bug pq a chave pode ser não única, dai poderia ter uma list mylist e um sset mylist e ter comandos esperando os dois
     // TODO: transformar em channels
@@ -42,10 +45,10 @@ impl RedisStore {
     pub async fn get_sorted_set_by_key(
         &self,
         key: &String,
-    ) -> tokio::sync::MappedMutexGuard<'_, RedisSortedSet> {
+    ) -> tokio::sync::MappedMutexGuard<'_, SortedSet> {
         let guard = self.sorted_sets.lock().await;
         MutexGuard::map(guard, |ss| {
-            ss.entry(key.clone()).or_insert_with(RedisSortedSet::new)
+            ss.entry(key.clone()).or_insert_with(SortedSet::new)
         })
     }
 

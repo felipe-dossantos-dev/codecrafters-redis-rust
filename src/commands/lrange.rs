@@ -1,7 +1,8 @@
+use super::traits::{ParseableCommand, RunnableCommand};
+use crate::{resp::RespDataType, store::RedisStore};
+use std::{sync::Arc, vec::IntoIter};
+use tokio::sync::Notify;
 
-use super::traits::ParseableCommand;
-use crate::resp::RespDataType;
-use std::vec::IntoIter;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct LRangeCommand {
@@ -57,5 +58,31 @@ impl LRangeCommand {
             return None;
         }
         Some((start, end))
+    }
+}
+
+
+impl RunnableCommand for LRangeCommand {
+    async fn execute(
+        &self,
+        _client_id: &str,
+        store: &Arc<RedisStore>,
+        _client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        if let Some(list_value) = store.lists.lock().await.get(&self.key.to_string()) {
+            let list_len = list_value.len() as i64;
+            let (start, end) = match self.clone().treat_bounds(list_len) {
+                Some(value) => value,
+                None => return Some(RespDataType::Array(vec![])),
+            };
+
+            let mut result_list: Vec<RespDataType> = Vec::new();
+
+            for i in start..=end {
+                result_list.push(RespDataType::bulk_string(&list_value[i]));
+            }
+            return Some(RespDataType::Array(result_list));
+        }
+        Some(RespDataType::Array(vec![]))
     }
 }

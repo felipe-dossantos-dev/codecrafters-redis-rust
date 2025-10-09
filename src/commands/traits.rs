@@ -1,5 +1,7 @@
-use crate::resp::RespDataType;
-use std::vec::IntoIter;
+use tokio::sync::Notify;
+
+use crate::{resp::RespDataType, store::RedisStore};
+use std::{sync::Arc, vec::IntoIter};
 
 pub trait ParseableCommand {
     fn parse(args: &mut IntoIter<RespDataType>) -> Result<Self, String>
@@ -16,4 +18,13 @@ pub trait ParseableCommand {
             Err(error_message.to_string())
         }
     }
+}
+
+pub trait RunnableCommand: Send + Sync {
+    async fn execute(
+        &self,
+        client_id: &str,
+        store: &Arc<RedisStore>,
+        client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType>;
 }

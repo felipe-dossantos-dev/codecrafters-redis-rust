@@ -1,11 +1,12 @@
 pub mod blpop;
 pub mod echo;
 pub mod get;
+use crate::client::RedisClient;
 pub mod key_type;
-pub mod key_value;
 pub mod llen;
 pub mod lpop;
 pub mod lpush;
+use crate::store::RedisStore;
 pub mod lrange;
 pub mod ping;
 pub mod rpush;
@@ -17,24 +18,30 @@ pub mod zrange;
 pub mod zrank;
 pub mod zrem;
 pub mod zscore;
-use crate::commands::{key_type::KeyTypeCommand, traits::ParseableCommand, zscore::ZScoreCommand};
+use crate::commands::{
+    key_type::KeyTypeCommand,
+    traits::{ParseableCommand, RunnableCommand},
+    zscore::ZScoreCommand,
+};
 
+use std::sync::Arc;
 use std::{
     time::{SystemTime, UNIX_EPOCH},
     vec::IntoIter,
 };
 
 use crate::{
-    command_parser,
+    self as app, command_parser,
     commands::{
-        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
-        llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
-        ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
-        zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
+        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, llen::LLenCommand,
+        lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand, ping::PingCommand,
+        rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand, zcard::ZCardCommand,
+        zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
     },
     resp::RespDataType,
     utils,
 };
+use tokio::sync::Notify;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum RedisCommand {
@@ -125,9 +132,41 @@ impl RedisCommand {
     }
 }
 
+impl RunnableCommand for RedisCommand {
+    async fn execute(
+        &self,
+        client_id: &str,
+        store: &Arc<RedisStore>,
+        client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        match self {
+            RedisCommand::PING(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ECHO(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::GET(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::SET(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::LPUSH(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::RPUSH(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::LRANGE(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::LLEN(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::LPOP(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::BLPOP(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ZADD(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ZCARD(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ZRANK(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ZRANGE(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ZSCORE(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::ZREM(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::TYPE(cmd) => cmd.execute(client_id, store, client_notifier).await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{commands::zadd::ZAddOptions, datatypes::sorted_set::SortedValue};
+    use crate::{
+        commands::zadd::ZAddOptions,
+        values::{key_value::KeyValue, sorted_set::SortedValue},
+    };
 
     use super::*;
 
@@ -177,7 +216,7 @@ mod tests {
             result,
             Ok(vec![RedisCommand::SET(SetCommand {
                 key: "test".to_string(),
-                value: RedisKeyValue {
+                value: KeyValue {
                     value: "test".to_string(),
                     expired_at_millis: None
                 }
@@ -354,19 +393,19 @@ mod tests {
 
     #[test]
     fn test_redis_key_value_is_expired() {
-        let not_expired = RedisKeyValue {
+        let not_expired = KeyValue {
             value: "value".to_string(),
             expired_at_millis: Some(utils::now_millis() + 10000),
         };
         assert!(!not_expired.is_expired());
 
-        let expired = RedisKeyValue {
+        let expired = KeyValue {
             value: "value".to_string(),
             expired_at_millis: Some(utils::now_millis() - 1),
         };
         assert!(expired.is_expired());
 
-        let no_expiry = RedisKeyValue {
+        let no_expiry = KeyValue {
             value: "value".to_string(),
             expired_at_millis: None,
         };
@@ -377,7 +416,7 @@ mod tests {
     fn test_redis_key_value_parse_errors() {
         // No value for key
         let mut args = vec![].into_iter();
-        assert!(RedisKeyValue::parse(&mut args).is_err());
+        assert!(KeyValue::parse(&mut args).is_err());
 
         // PX with no value
         let mut args = vec![
@@ -386,7 +425,7 @@ mod tests {
         ]
         .into_iter();
         assert_eq!(
-            RedisKeyValue::parse(&mut args).unwrap_err(),
+            KeyValue::parse(&mut args).unwrap_err(),
             "PX option requires a value"
         );
 
@@ -397,7 +436,7 @@ mod tests {
             RespDataType::bulk_string("abc"),
         ]
         .into_iter();
-        assert!(RedisKeyValue::parse(&mut args)
+        assert!(KeyValue::parse(&mut args)
             .unwrap_err()
             .contains("Cannot parse PX value"));
     }

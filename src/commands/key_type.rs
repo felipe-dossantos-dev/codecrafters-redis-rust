@@ -1,6 +1,10 @@
+use tokio::sync::Notify;
+
 use super::traits::ParseableCommand;
-use crate::resp::RespDataType;
-use std::vec::IntoIter;
+use crate::{
+    commands::traits::RunnableCommand, resp::RespDataType, store::RedisStore, values::RedisValue,
+};
+use std::{sync::Arc, vec::IntoIter};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct KeyTypeCommand {
@@ -12,5 +16,19 @@ impl ParseableCommand for KeyTypeCommand {
         let key = Self::get_arg_as_string(args, "TYPE command requires a key")?;
 
         Ok(KeyTypeCommand { key })
+    }
+}
+
+impl RunnableCommand for KeyTypeCommand {
+    async fn execute(
+        &self,
+        _client_id: &str,
+        store: &Arc<RedisStore>,
+        _client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        match store.keys.lock().await.get(&self.key) {
+            Some(tp) => Some(tp.to_type_resp()),
+            None => Some(RedisValue::None.to_type_resp()),
+        }
     }
 }

@@ -1,6 +1,8 @@
+use tokio::sync::Notify;
+
 use super::traits::ParseableCommand;
-use crate::resp::RespDataType;
-use std::vec::IntoIter;
+use crate::{commands::traits::RunnableCommand, resp::RespDataType, store::RedisStore};
+use std::{sync::Arc, vec::IntoIter};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ZCardCommand {
@@ -12,5 +14,19 @@ impl ParseableCommand for ZCardCommand {
         let key = Self::get_arg_as_string(args, "ZCARD command requires a key")?;
 
         Ok(ZCardCommand { key })
+    }
+}
+
+impl RunnableCommand for ZCardCommand {
+    async fn execute(
+        &self,
+        _client_id: &str,
+        store: &Arc<RedisStore>,
+        _client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        if let Some(ss) = store.sorted_sets.lock().await.get(&self.key.to_string()) {
+            return Some(RespDataType::Integer(ss.len()));
+        }
+        Some(RespDataType::Integer(0))
     }
 }

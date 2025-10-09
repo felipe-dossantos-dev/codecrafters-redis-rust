@@ -2,12 +2,12 @@
 mod client;
 mod commands;
 mod connection;
-mod datatypes;
 mod macros;
 mod resp;
 mod server;
 mod store;
 mod utils;
+mod values;
 
 use server::RedisServer;
 use tokio::io::Result;

@@ -1,6 +1,10 @@
-use super::traits::ParseableCommand;
-use crate::resp::RespDataType;
-use std::vec::IntoIter;
+use crate::{
+    commands::traits::{ParseableCommand, RunnableCommand},
+    resp::RespDataType,
+    store::RedisStore,
+};
+use std::{sync::Arc, vec::IntoIter};
+use tokio::sync::Notify;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ZScoreCommand {
@@ -14,5 +18,21 @@ impl ParseableCommand for ZScoreCommand {
         let member = Self::get_arg_as_string(args, "ZSCORE command requires a member")?;
 
         Ok(ZScoreCommand { key, member })
+    }
+}
+
+impl RunnableCommand for ZScoreCommand {
+    async fn execute(
+        &self,
+        _client_id: &str,
+        store: &Arc<RedisStore>,
+        _client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        if let Some(ss) = store.sorted_sets.lock().await.get(&self.key.to_string()) {
+            if let Some(value) = ss.get_score_by_member(&self.member) {
+                return Some(RespDataType::bulk_string(&value.to_string()));
+            }
+        }
+        Some(RespDataType::Null)
     }
 }

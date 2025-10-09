@@ -33,13 +33,13 @@ impl Ord for SortedValue {
     }
 }
 
-#[derive(Debug)]
-pub struct RedisSortedSet {
+#[derive(Debug, PartialEq, Eq)]
+pub struct SortedSet {
     set: BTreeSet<SortedValue>,
     map: BTreeMap<String, SortedValue>,
 }
 
-impl RedisSortedSet {
+impl SortedSet {
     pub fn new() -> Self {
         Self {
             set: BTreeSet::new(),

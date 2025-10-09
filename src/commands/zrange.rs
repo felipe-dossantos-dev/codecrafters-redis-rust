@@ -2,6 +2,11 @@ use super::traits::ParseableCommand;
 use crate::resp::RespDataType;
 use std::vec::IntoIter;
 
+use tokio::sync::Notify;
+
+use crate::{commands::traits::RunnableCommand, store::RedisStore};
+use std::sync::Arc;
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct ZRangeCommand {
     pub key: String,
@@ -56,5 +61,33 @@ impl ZRangeCommand {
             return None;
         }
         Some((start, end))
+    }
+}
+
+impl RunnableCommand for ZRangeCommand {
+    async fn execute(
+        &self,
+        _client_id: &str,
+        store: &Arc<RedisStore>,
+        _client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        // TODO - fix this clone
+        if let Some(ss) = store.sorted_sets.lock().await.get(&self.key.to_string()) {
+            let (start, end) = match self.clone().treat_bounds(ss.len()) {
+                Some(value) => value,
+                None => return Some(RespDataType::Array(vec![])),
+            };
+
+            // não é muito amigavel com a memória pq vai estar trazendo o Set inteiro transformado para a memória
+            // mas para corrigir isso precisaria escrever a resposta cada mapeamento feito direto no client
+            // o que mudaria a arquitetura no momento, transformando em streams, talvez no futuro mexo nisso
+            let result_list = ss
+                .range(start, end)
+                .map(|v| RespDataType::bulk_string(&v.member))
+                .collect();
+
+            return Some(RespDataType::Array(result_list));
+        }
+        Some(RespDataType::Array(vec![]))
     }
 }

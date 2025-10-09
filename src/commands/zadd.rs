@@ -1,6 +1,11 @@
+use tokio::sync::Notify;
+
 use super::traits::ParseableCommand;
-use crate::datatypes::sorted_set::SortedValue;
+use crate::commands::traits::RunnableCommand;
 use crate::resp::RespDataType;
+use crate::store::RedisStore;
+use crate::values::sorted_set::SortedValue;
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -105,5 +110,22 @@ impl ParseableCommand for ZAddCommand {
             options,
             values,
         })
+    }
+}
+
+impl RunnableCommand for ZAddCommand {
+    async fn execute(
+        &self,
+        _client_id: &str,
+        store: &Arc<RedisStore>,
+        _client_notifier: &Arc<Notify>,
+    ) -> Option<RespDataType> {
+        let mut ss = store.get_sorted_set_by_key(&self.key).await;
+        let mut added = 0;
+        for value in self.values.clone() {
+            let count = ss.replace(value);
+            added += count;
+        }
+        Some(RespDataType::Integer(added))
     }
 }

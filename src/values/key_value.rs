@@ -1,24 +1,27 @@
-use std::
-    vec::IntoIter
-;
+use std::vec::IntoIter;
 
-use crate::{resp::RespDataType, utils};
+use crate::{commands::traits::ParseableCommand, resp::RespDataType, utils};
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct RedisKeyValue {
+pub struct KeyValue {
     pub value: String,
     pub expired_at_millis: Option<u128>,
 }
 
-impl RedisKeyValue {
+impl KeyValue {
     pub fn is_expired(&self) -> bool {
         if let Some(val) = self.expired_at_millis {
             return val <= utils::now_millis();
         }
         false
     }
+}
 
-    pub fn parse(args: &mut IntoIter<RespDataType>) -> Result<Self, String> {
+impl ParseableCommand for KeyValue {
+    fn parse(args: &mut IntoIter<RespDataType>) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
         let value = args
             .next()
             .ok_or_else(|| "Expected a value for RedisKeyValue".to_string())?;
@@ -49,5 +52,3 @@ impl RedisKeyValue {
         })
     }
 }
-
-

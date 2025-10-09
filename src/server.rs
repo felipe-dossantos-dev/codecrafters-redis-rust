@@ -15,8 +15,8 @@ use tokio::{
 
 use crate::{
     client::RedisClient,
-    commands::{zadd::ZAddCommand, RedisCommand},
-    datatypes::DataType,
+    commands::{traits::RunnableCommand, zadd::ZAddCommand, RedisCommand},
+    values::RedisValue,
     resp::RespDataType,
     store::{RedisStore, WaitResult},
     utils,
@@ -105,197 +105,7 @@ impl RedisServer {
         client: &RedisClient<impl AsyncReadExt + AsyncWriteExt + Unpin + Send>,
         store: &Arc<RedisStore>,
     ) -> Option<RespDataType> {
-        match command {
-            RedisCommand::GET(cmd) => {
-                let response = match store.pairs.lock().await.get(&cmd.key.to_string()) {
-                    Some(val) if !val.is_expired() => RespDataType::bulk_string(&val.value),
-                    _ => RespDataType::Null,
-                };
-                Some(response)
-            }
-            RedisCommand::SET(cmd) => {
-                store.pairs.lock().await.insert(cmd.key.clone(), cmd.value);
-                store
-                    .keys
-                    .lock()
-                    .await
-                    .insert(cmd.key.clone(), DataType::String);
-                Some(RespDataType::ok())
-            }
-            RedisCommand::PING(_) => Some(RespDataType::pong()),
-            RedisCommand::ECHO(cmd) => Some(RespDataType::bulk_string(&cmd.message)),
-            RedisCommand::RPUSH(cmd) => {
-                let mut lists_guard = store.lists.lock().await;
-                let list = lists_guard
-                    .entry(cmd.key.clone())
-                    .or_insert_with(VecDeque::new);
-                if list.is_empty() {
-                    store.notify_by_key(&cmd.key).await;
-                }
-                list.extend(cmd.values);
-                let len = list.len() as i64;
-
-                Some(RespDataType::Integer(len))
-            }
-            RedisCommand::LPUSH(cmd) => {
-                let mut lists_guard = store.lists.lock().await;
-                let list = lists_guard
-                    .entry(cmd.key.clone())
-                    .or_insert_with(VecDeque::new);
-                if list.is_empty() {
-                    store.notify_by_key(&cmd.key).await;
-                }
-                for value in cmd.values.iter() {
-                    list.insert(0, value.clone());
-                }
-                let len = list.len() as i64;
-                Some(RespDataType::Integer(len))
-            }
-            RedisCommand::LRANGE(mut cmd) => {
-                if let Some(list_value) = store.lists.lock().await.get(&cmd.key.to_string()) {
-                    let list_len = list_value.len() as i64;
-                    let (start, end) = match cmd.treat_bounds(list_len) {
-                        Some(value) => value,
-                        None => return Some(RespDataType::Array(vec![])),
-                    };
-
-                    let mut result_list: Vec<RespDataType> = Vec::new();
-
-                    for i in start..=end {
-                        result_list.push(RespDataType::bulk_string(&list_value[i]));
-                    }
-                    return Some(RespDataType::Array(result_list));
-                }
-                Some(RespDataType::Array(vec![]))
-            }
-            RedisCommand::LLEN(cmd) => {
-                let mut lists_guard = store.lists.lock().await;
-                let list = lists_guard.entry(cmd.key).or_insert_with(VecDeque::new);
-                let len = list.len() as i64;
-                Some(RespDataType::Integer(len))
-            }
-            RedisCommand::LPOP(cmd) => lpop(&store.lists, cmd.key, cmd.count).await,
-            RedisCommand::BLPOP(cmd) => {
-                let start_time = utils::now_millis();
-                loop {
-                    let lpop_result = lpop(&store.lists, cmd.key.clone(), 1).await;
-                    if !matches!(lpop_result, Some(RespDataType::Null)) {
-                        return lpop_result.map(|val| {
-                            RespDataType::Array(vec![
-                                RespDataType::bulk_string(cmd.key.as_str()),
-                                val,
-                            ])
-                        });
-                    }
-
-                    let elapsed = utils::now_millis() - start_time;
-                    if cmd.timeout > 0.0 && elapsed >= (cmd.timeout * 1000.0) as u128 {
-                        return Some(RespDataType::NullArray);
-                    }
-
-                    let remaining_timeout = std::time::Duration::from_millis(
-                        (cmd.timeout * 1000.0) as u64 - elapsed as u64,
-                    );
-                    match store
-                        .wait_until_timeout(&cmd.key, remaining_timeout, &client.notifier)
-                        .await
-                    {
-                        WaitResult::Timeout => {
-                            return Some(RespDataType::NullArray);
-                        }
-                        _ => {}
-                    };
-                }
-            }
-            RedisCommand::ZADD(cmd) => {
-                let mut ss = store.get_sorted_set_by_key(&cmd.key).await;
-                let mut added = 0;
-                for value in cmd.values {
-                    let count = ss.replace(value);
-                    added += count;
-                }
-                Some(RespDataType::Integer(added))
-            }
-            RedisCommand::ZRANK(cmd) => {
-                let ss = store.get_sorted_set_by_key(&cmd.key).await;
-                match ss.get_rank_by_member(&cmd.member) {
-                    Some(val) => Some(RespDataType::Integer(val)),
-                    None => Some(RespDataType::Null),
-                }
-            }
-            RedisCommand::ZRANGE(mut cmd) => {
-                if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
-                    let (start, end) = match cmd.treat_bounds(ss.len()) {
-                        Some(value) => value,
-                        None => return Some(RespDataType::Array(vec![])),
-                    };
-
-                    // não é muito amigavel com a memória pq vai estar trazendo o Set inteiro transformado para a memória
-                    // mas para corrigir isso precisaria escrever a resposta cada mapeamento feito direto no client
-                    // o que mudaria a arquitetura no momento, transformando em streams, talvez no futuro mexo nisso
-                    let result_list = ss
-                        .range(start, end)
-                        .map(|v| RespDataType::bulk_string(&v.member))
-                        .collect();
-
-                    return Some(RespDataType::Array(result_list));
-                }
-                Some(RespDataType::Array(vec![]))
-            }
-            RedisCommand::ZCARD(cmd) => {
-                if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
-                    return Some(RespDataType::Integer(ss.len()));
-                }
-                Some(RespDataType::Integer(0))
-            }
-            RedisCommand::ZSCORE(cmd) => {
-                if let Some(ss) = store.sorted_sets.lock().await.get(&cmd.key.to_string()) {
-                    if let Some(value) = ss.get_score_by_member(&cmd.member) {
-                        return Some(RespDataType::bulk_string(&value.to_string()));
-                    }
-                }
-                Some(RespDataType::Null)
-            }
-            RedisCommand::ZREM(cmd) => {
-                let value = store
-                    .get_sorted_set_by_key(&cmd.key)
-                    .await
-                    .remove_by_member(&cmd.member);
-                return Some(RespDataType::Integer(value));
-            }
-            RedisCommand::TYPE(cmd) => match store.keys.lock().await.get(&cmd.key) {
-                Some(tp) => Some(tp.to_resp()),
-                None => Some(DataType::None.to_resp()),
-            },
-        }
-    }
-}
-
-async fn lpop(
-    lists: &Mutex<HashMap<String, VecDeque<String>>>,
-    key: String,
-    count: i64,
-) -> Option<RespDataType> {
-    let mut lists_guard = lists.lock().await;
-    let list = lists_guard.entry(key);
-    match list {
-        Occupied(mut occupied_entry) => {
-            let mut popped_elements: Vec<RespDataType> = Vec::new();
-            for _i in 0..count {
-                if let Some(val) = occupied_entry.get_mut().pop_front() {
-                    popped_elements.push(RespDataType::bulk_string(val.as_str()));
-                } else {
-                    break;
-                }
-            }
-            if count == 1 && !popped_elements.is_empty() {
-                return Some(popped_elements.remove(0));
-            } else if count > 1 {
-                return Some(RespDataType::Array(popped_elements));
-            }
-            Some(RespDataType::Null)
-        }
-        Vacant(_) => Some(RespDataType::Null),
+        command.execute(&client.id, store, &client.notifier).await
     }
 }
 
@@ -309,15 +119,16 @@ mod tests {
 
     use super::*;
     use crate::commands::key_type::KeyTypeCommand;
+    use crate::commands::lpop;
     use crate::commands::zadd::ZAddOptions;
     use crate::commands::{
-        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, key_value::RedisKeyValue,
-        llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand,
-        ping::PingCommand, rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand,
-        zcard::ZCardCommand, zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
-        zscore::ZScoreCommand,
+        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, llen::LLenCommand,
+        lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand, ping::PingCommand,
+        rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand, zcard::ZCardCommand,
+        zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand, zscore::ZScoreCommand,
     };
-    use crate::datatypes::sorted_set::SortedValue;
+    use crate::values::key_value::KeyValue;
+    use crate::values::sorted_set::SortedValue;
     use crate::resp::RespDataType;
     use crate::utils;
 
@@ -753,7 +564,7 @@ mod tests {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let key = "mykey".to_string();
-        let value = RedisKeyValue {
+        let value = KeyValue {
             value: "myvalue".to_string(),
             expired_at_millis: None,
         };
@@ -774,7 +585,7 @@ mod tests {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let key = "mykey".to_string();
-        let value = RedisKeyValue {
+        let value = KeyValue {
             value: "myvalue".to_string(),
             expired_at_millis: Some(utils::now_millis() - 1),
         };
@@ -795,7 +606,7 @@ mod tests {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let key = "mykey".to_string();
-        let value = RedisKeyValue {
+        let value = KeyValue {
             value: "myvalue".to_string(),
             expired_at_millis: None,
         };
@@ -820,7 +631,7 @@ mod tests {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         let key = "mykey".to_string();
-        let value = RedisKeyValue {
+        let value = KeyValue {
             value: "myvalue".to_string(),
             expired_at_millis: Some(utils::now_millis() + 10000),
         };
@@ -838,35 +649,6 @@ mod tests {
         let stored_value = pairs_guard.get(&key).unwrap();
         assert_eq!(stored_value.value, "myvalue");
         assert!(stored_value.expired_at_millis.is_some()); // Access public field
-    }
-
-    #[tokio::test]
-    async fn test_lpop_non_existent_key() {
-        let lists = Mutex::new(HashMap::new());
-        let result = lpop(&lists, "no-such-key".to_string(), 1).await;
-        assert_eq!(result, Some(RespDataType::Null));
-    }
-
-    #[tokio::test]
-    async fn test_lpop_empty_list() {
-        let lists = Mutex::new(HashMap::from([("empty-list".to_string(), VecDeque::new())]));
-        let result = lpop(&lists, "empty-list".to_string(), 1).await;
-        assert_eq!(result, Some(RespDataType::Null));
-    }
-
-    #[tokio::test]
-    async fn test_lpop_more_than_exists() {
-        let lists = Mutex::new(HashMap::from([(
-            "mylist".to_string(),
-            VecDeque::from(["one".to_string()]),
-        )]));
-        let result = lpop(&lists, "mylist".to_string(), 2).await;
-        assert_eq!(
-            result,
-            Some(RespDataType::Array(vec![RespDataType::bulk_string("one")]))
-        );
-        let lists_guard = lists.lock().await;
-        assert!(lists_guard.get("mylist").unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1301,7 +1083,7 @@ mod tests {
         let store = Arc::new(RedisStore::new());
         let command = RedisCommand::SET(SetCommand {
             key: "key".to_string(),
-            value: RedisKeyValue {
+            value: KeyValue {
                 value: "Value".to_string(),
                 expired_at_millis: None,
             },
