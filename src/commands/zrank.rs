@@ -25,7 +25,7 @@ impl RunnableCommand for ZRankCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let ss = store.get_sorted_set_by_key(&self.key).await;
+        let ss = store.get_sorted_set(&self.key).await;
         match ss.get_rank_by_member(&self.member) {
             Some(val) => Some(RespDataType::Integer(val)),
             None => Some(RespDataType::Null),

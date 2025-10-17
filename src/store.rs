@@ -4,7 +4,11 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::{Mutex, MutexGuard, Notify, OwnedMutexGuard};
+use tokio::sync::{
+    broadcast,
+    broadcast::{Receiver, Sender},
+    Mutex, MutexGuard, Notify, OwnedMutexGuard,
+};
 
 use crate::values::RedisValue;
 use crate::values::{
@@ -20,76 +24,60 @@ pub enum WaitResult {
 
 #[derive(Debug)]
 pub struct RedisStore {
-    pub keys: Mutex<HashMap<String, RedisValue>>,
-    pub pairs: Mutex<HashMap<String, KeyValue>>,
-    pub lists: Mutex<HashMap<String, VecDeque<String>>>,
-    pub sorted_sets: Mutex<HashMap<String, SortedSet>>,
-    // para cada estrutura de dados com a key "X", tem vários clientes esperando ser notificados por algo
-    // pode dar bug pq a chave pode ser não única, dai poderia ter uma list mylist e um sset mylist e ter comandos esperando os dois
-    // TODO: transformar em channels
-    // https://tokio.rs/tokio/tutorial/channels
-    pub client_notifiers: Mutex<HashMap<String, Vec<Arc<Notify>>>>,
+    pub data: Mutex<HashMap<String, RedisValue>>,
+    pub key_notifiers: Mutex<HashMap<String, Sender<()>>>,
 }
 
 impl RedisStore {
     pub fn new() -> Self {
         Self {
-            keys: Mutex::new(HashMap::new()),
-            pairs: Mutex::new(HashMap::new()),
-            lists: Mutex::new(HashMap::new()),
-            sorted_sets: Mutex::new(HashMap::new()),
-            client_notifiers: Mutex::new(HashMap::new()),
+            data: Mutex::new(HashMap::new()),
+            key_notifiers: Mutex::new(HashMap::new()),
         }
     }
 
-    pub async fn get_sorted_set_by_key(
+    pub async fn get_key_value(
+        &self,
+        key: &String,
+    ) -> Option<tokio::sync::MappedMutexGuard<'_, KeyValue>> {
+        let guard = self.data.lock().await;
+        MutexGuard::try_map(guard, |map| {
+            if let Some(RedisValue::String(kv)) = map.get_mut(key) {
+                Some(kv)
+            } else {
+                None
+            }
+        })
+        .ok()
+    }
+
+    pub async fn get_sorted_set(
         &self,
         key: &String,
     ) -> tokio::sync::MappedMutexGuard<'_, SortedSet> {
-        let guard = self.sorted_sets.lock().await;
-        MutexGuard::map(guard, |ss| {
-            ss.entry(key.clone()).or_insert_with(SortedSet::new)
-        })
-    }
-
-    pub async fn notify_by_key(&self, key: &String) {
-        if let Some(clients_notifiers) = self.client_notifiers.lock().await.get(key) {
-            clients_notifiers.first().map(|f| f.notify_one());
-        }
-    }
-
-    pub async fn wait_until_timeout(
-        &self,
-        key: &String,
-        duration: Duration,
-        notifier: &Arc<Notify>,
-    ) -> WaitResult {
-        {
-            let notifier_clone = notifier.clone();
-            let mut notifiers = self.client_notifiers.lock().await;
-            notifiers
-                .entry(key.clone())
-                .or_insert_with(Vec::new)
-                .push(notifier_clone);
-        }
-
-        let mut result = WaitResult::Notified;
-        if duration > Duration::ZERO {
-            tokio::select! {
-                _ = notifier.notified() => {
-                }
-                _ = tokio::time::sleep(duration) => {
-                    result = WaitResult::Timeout;
-                }
+        let guard = self.data.lock().await;
+        MutexGuard::try_map(guard, |map| {
+            if let Some(RedisValue::ZSet(kv)) = map.get_mut(key) {
+                Some(kv)
+            } else {
+                None
             }
-        } else {
-            notifier.notified().await;
-        }
+        })
+        .ok()
+    }
 
-        if let Some(vec) = self.client_notifiers.lock().await.get_mut(key) {
-            vec.retain(|n| !Arc::ptr_eq(n, &notifier));
-        }
+    pub async fn subscribe_to_key(&self, key: &String) -> Receiver<()> {
+        let mut notifiers_guard = self.key_notifiers.lock().await;
+        let sender = notifiers_guard
+            .entry(key.clone())
+            .or_insert_with(|| broadcast::channel(1).0);
+        sender.subscribe()
+    }
 
-        return result;
+    pub async fn notify_key_modified(&self, key: &String) {
+        let notifiers_guard = self.key_notifiers.lock().await;
+        if let Some(sender) = notifiers_guard.get(key) {
+            let _ = sender.send(());
+        }
     }
 }

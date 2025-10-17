@@ -90,5 +90,37 @@ impl RunnableCommand for BLPopCommand {
                 _ => {}
             };
         }
+        //     let mut receiver = store.subscribe_to_key(&cmd.key, DataType::List).await; // Assumindo DataType::List
+        // let start_time = utils::now_millis();
+        // loop {
+        //     // Tenta fazer o LPOP
+        //     let lpop_result = lpop(&store.data, cmd.key.clone(), 1).await; // lpop precisaria ser adaptado para RedisValue
+        //     if !matches!(lpop_result, Some(RespDataType::Null)) {
+        //         return lpop_result.map(|val| {
+        //             RespDataType::Array(vec![
+        //                 RespDataType::bulk_string(cmd.key.as_str()),
+        //                 val,
+        //             ])
+        //         });
+        //     }
+
+        //     let elapsed = utils::now_millis() - start_time;
+        //     if cmd.timeout > 0.0 && elapsed >= (cmd.timeout * 1000.0) as u128 {
+        //         return Some(RespDataType::NullArray);
+        //     }
+
+        //     let remaining_timeout = Duration::from_millis(
+        //         (cmd.timeout * 1000.0) as u64 - elapsed as u64,
+        //     );
+
+        //     tokio::select! {
+        //         _ = receiver.recv() => {
+        //             // Notificado, tenta novamente
+        //         }
+        //         _ = tokio::time::sleep(remaining_timeout) => {
+        //             return Some(RespDataType::NullArray); // Timeout
+        //         }
+        //     }
+        // }
     }
 }
