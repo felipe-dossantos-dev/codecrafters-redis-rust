@@ -24,11 +24,12 @@ impl RunnableCommand for LLenCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let mut lists_guard = store.lists.lock().await;
-        let list = lists_guard
-            .entry(self.key.clone())
-            .or_insert_with(VecDeque::new);
-        let len = list.len() as i64;
-        Some(RespDataType::Integer(len))
+        match store.get_list(&self.key).await {
+            Some(list) => {
+                let len = list.len() as i64;
+                Some(RespDataType::Integer(len))
+            }
+            None => Some(RespDataType::Integer(0)),
+        }
     }
 }

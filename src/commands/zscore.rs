@@ -28,11 +28,12 @@ impl RunnableCommand for ZScoreCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        if let Some(ss) = store.sorted_sets.lock().await.get(&self.key.to_string()) {
-            if let Some(value) = ss.get_score_by_member(&self.member) {
-                return Some(RespDataType::bulk_string(&value.to_string()));
-            }
+        match store.get_sorted_set(&self.key).await {
+            Some(ss) => match ss.get_score_by_member(&self.member) {
+                Some(value) => Some(RespDataType::bulk_string(&value.to_string())),
+                None => Some(RespDataType::Null),
+            },
+            None => Some(RespDataType::Null),
         }
-        Some(RespDataType::Null)
     }
 }

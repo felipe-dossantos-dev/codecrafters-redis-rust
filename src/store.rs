@@ -1,30 +1,30 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, HashMap, VecDeque},
     sync::Arc,
-    time::Duration,
 };
 
+use anyhow::Ok;
 use tokio::sync::{
-    broadcast,
-    broadcast::{Receiver, Sender},
-    Mutex, MutexGuard, Notify, OwnedMutexGuard,
+    broadcast::{self, Receiver, Sender},
+    MappedMutexGuard, Mutex, MutexGuard,
 };
 
 use crate::values::RedisValue;
-use crate::values::{
-    key_value::KeyValue,
-    sorted_set::{SortedSet, SortedValue},
-};
+use crate::values::{key_value::KeyValue, sorted_set::SortedSet};
 
 #[derive(Debug, PartialEq)]
-pub enum WaitResult {
-    Notified,
-    Timeout,
+pub enum KeyResult {
+    /// The key was created sucessfully
+    Created,
+    /// The key already exists, has same type and was updated
+    Updated,
+    /// The key already exists and has different type
+    Error(String),
 }
 
 #[derive(Debug)]
 pub struct RedisStore {
-    pub data: Mutex<HashMap<String, RedisValue>>,
+    data: Mutex<HashMap<String, RedisValue>>,
     pub key_notifiers: Mutex<HashMap<String, Sender<()>>>,
 }
 
@@ -36,10 +36,7 @@ impl RedisStore {
         }
     }
 
-    pub async fn get_key_value(
-        &self,
-        key: &String,
-    ) -> Option<tokio::sync::MappedMutexGuard<'_, KeyValue>> {
+    pub async fn get_key_value(&self, key: &String) -> Option<MappedMutexGuard<'_, KeyValue>> {
         let guard = self.data.lock().await;
         MutexGuard::try_map(guard, |map| {
             if let Some(RedisValue::String(kv)) = map.get_mut(key) {
@@ -51,17 +48,62 @@ impl RedisStore {
         .ok()
     }
 
-    pub async fn get_sorted_set(
-        &self,
-        key: &String,
-    ) -> tokio::sync::MappedMutexGuard<'_, SortedSet> {
-        let guard = self.data.lock().await;
-        MutexGuard::try_map(guard, |map| {
-            if let Some(RedisValue::ZSet(kv)) = map.get_mut(key) {
-                Some(kv)
-            } else {
-                None
+    pub async fn create_or_update_key(&self, key: &String, value: RedisValue) -> KeyResult {
+        let mut guard = self.data.lock().await;
+        let entry = guard.entry(key.to_string());
+        match entry {
+            Entry::Occupied(mut o) => {
+                if !matches!(o.get(), _value) {
+                    return KeyResult::Error(
+                        "WRONGTYPE Operation against a key holding the wrong kind of value"
+                            .to_string(),
+                    );
+                }
+                o.insert(value);
+                KeyResult::Updated
             }
+            Entry::Vacant(v) => {
+                v.insert(value);
+                KeyResult::Created
+            }
+        }
+    }
+
+    pub async fn create(&self, key: &String, value: RedisValue) -> KeyResult {
+        let mut guard = self.data.lock().await;
+        let entry = guard.entry(key.to_string());
+        match entry {
+            Entry::Occupied(_) => KeyResult::Error("Key already exists".to_string()),
+            Entry::Vacant(v) => {
+                v.insert(value);
+                KeyResult::Created
+            }
+        }
+    }
+
+    pub async fn get_key(&self, key: &String) -> Option<MappedMutexGuard<'_, RedisValue>> {
+        let guard = self.data.lock().await;
+        MutexGuard::try_map(guard, |map| match map.get_mut(key) {
+            Some(val) => Some(val),
+            _ => None,
+        })
+        .ok()
+    }
+
+    pub async fn get_list(&self, key: &String) -> Option<MappedMutexGuard<'_, VecDeque<String>>> {
+        let guard = self.data.lock().await;
+        MutexGuard::try_map(guard, |map| match map.get_mut(key) {
+            Some(RedisValue::List(list)) => Some(list),
+            _ => None,
+        })
+        .ok()
+    }
+
+    pub async fn get_sorted_set(&self, key: &String) -> Option<MappedMutexGuard<'_, SortedSet>> {
+        let guard = self.data.lock().await;
+        MutexGuard::try_map(guard, |map| match map.get_mut(key) {
+            Some(RedisValue::ZSet(kv)) => Some(kv),
+            _ => None,
         })
         .ok()
     }

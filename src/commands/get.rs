@@ -22,7 +22,7 @@ impl RunnableCommand for GetCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let response = match store.pairs.lock().await.get(&self.key.to_string()) {
+        let response = match store.get_key_value(&self.key).await {
             Some(val) if !val.is_expired() => RespDataType::bulk_string(&val.value),
             _ => RespDataType::Null,
         };

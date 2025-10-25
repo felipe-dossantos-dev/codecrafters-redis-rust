@@ -68,6 +68,10 @@ impl RespDataType {
         return RespDataType::SimpleString(String::from(value));
     }
 
+    pub fn error(value: &str) -> RespDataType {
+        return RespDataType::SimpleString(String::from(value));
+    }
+
     pub fn ok() -> RespDataType {
         return RespDataType::simple_string("OK");
     }

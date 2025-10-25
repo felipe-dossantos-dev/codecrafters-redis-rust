@@ -25,10 +25,12 @@ impl RunnableCommand for ZRemCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let value = store
-            .get_sorted_set_by_key(&self.key)
-            .await
-            .remove_by_member(&self.member);
-        return Some(RespDataType::Integer(value));
+        match store.get_sorted_set(&self.key).await {
+            Some(mut ss) => {
+                let value = ss.remove_by_member(&self.member);
+                return Some(RespDataType::Integer(value));
+            }
+            None => Some(RespDataType::Integer(0)),
+        }
     }
 }

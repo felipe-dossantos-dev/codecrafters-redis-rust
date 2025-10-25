@@ -1,10 +1,13 @@
 use std::collections::VecDeque;
 
 use super::traits::{ParseableCommand, RunnableCommand};
-use crate::{resp::RespDataType, store::RedisStore};
+use crate::{
+    resp::RespDataType,
+    store::{KeyResult, RedisStore},
+    values::RedisValue,
+};
 use std::{sync::Arc, vec::IntoIter};
 use tokio::sync::Notify;
-
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct RPushCommand {
@@ -24,7 +27,6 @@ impl ParseableCommand for RPushCommand {
     }
 }
 
-
 impl RunnableCommand for RPushCommand {
     async fn execute(
         &self,
@@ -32,16 +34,31 @@ impl RunnableCommand for RPushCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let mut lists_guard = store.lists.lock().await;
-        let list = lists_guard
-            .entry(self.key.clone())
-            .or_insert_with(VecDeque::new);
-        if list.is_empty() {
-            store.notify_by_key(&self.key).await;
-        }
-        list.extend(self.values.clone());
-        let len = list.len() as i64;
+        match store.get_list(&self.key).await {
+            Some(mut list) => {
+                for value in self.values.iter() {
+                    list.push_back(value.clone());
+                }
+                store.notify_key_modified(&self.key).await;
+                let len = list.len() as i64;
+                return Some(RespDataType::Integer(len));
+            }
+            None => {
+                let mut new_list = VecDeque::new();
+                for value in self.values.iter() {
+                    new_list.push_back(value.clone());
+                }
+                let len = new_list.len() as i64;
+                let result = store.create(&self.key, RedisValue::List(new_list)).await;
 
-        Some(RespDataType::Integer(len))
+                match result {
+                    KeyResult::Error(e) => Some(RespDataType::error(&e)),
+                    _ => {
+                        store.notify_key_modified(&self.key).await;
+                        Some(RespDataType::Integer(len))
+                    }
+                }
+            }
+        }
     }
 }

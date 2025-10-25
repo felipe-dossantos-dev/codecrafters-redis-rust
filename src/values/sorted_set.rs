@@ -58,7 +58,7 @@ impl SortedSet {
         return count;
     }
 
-    /// Remove pelo membro
+    /// Remove pelo membro, retorna a quantidade de membros removidos
     pub fn remove_by_member(&mut self, member: &String) -> i64 {
         let mut count = 0;
         if let Some(old_value) = self.map.remove(member) {

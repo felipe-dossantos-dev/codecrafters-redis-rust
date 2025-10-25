@@ -1,12 +1,10 @@
 pub mod blpop;
 pub mod echo;
 pub mod get;
-use crate::client::RedisClient;
 pub mod key_type;
 pub mod llen;
 pub mod lpop;
 pub mod lpush;
-use crate::store::RedisStore;
 pub mod lrange;
 pub mod ping;
 pub mod rpush;
@@ -18,11 +16,6 @@ pub mod zrange;
 pub mod zrank;
 pub mod zrem;
 pub mod zscore;
-use crate::commands::{
-    key_type::KeyTypeCommand,
-    traits::{ParseableCommand, RunnableCommand},
-    zscore::ZScoreCommand,
-};
 
 use std::sync::Arc;
 use std::{
@@ -30,15 +23,30 @@ use std::{
     vec::IntoIter,
 };
 
+use crate::command_parser;
 use crate::{
-    self as app, command_parser,
     commands::{
-        blpop::BLPopCommand, echo::EchoCommand, get::GetCommand, llen::LLenCommand,
-        lpop::LPopCommand, lpush::LPushCommand, lrange::LRangeCommand, ping::PingCommand,
-        rpush::RPushCommand, set::SetCommand, zadd::ZAddCommand, zcard::ZCardCommand,
-        zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand,
+        blpop::BLPopCommand,
+        echo::EchoCommand,
+        get::GetCommand,
+        key_type::KeyTypeCommand,
+        llen::LLenCommand,
+        lpop::LPopCommand,
+        lpush::LPushCommand,
+        lrange::LRangeCommand,
+        ping::PingCommand,
+        rpush::RPushCommand,
+        set::SetCommand,
+        traits::{ParseableCommand, RunnableCommand},
+        zadd::ZAddCommand,
+        zcard::ZCardCommand,
+        zrange::ZRangeCommand,
+        zrank::ZRankCommand,
+        zrem::ZRemCommand,
+        zscore::ZScoreCommand,
     },
     resp::RespDataType,
+    store::RedisStore,
     utils,
 };
 use tokio::sync::Notify;

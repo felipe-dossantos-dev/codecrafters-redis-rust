@@ -34,13 +34,11 @@ impl RunnableCommand for LPopCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let mut lists_guard = store.lists.lock().await;
-        let list = lists_guard.entry(self.key.clone());
-        match list {
-            Occupied(mut occupied_entry) => {
+        match store.get_list(&self.key).await {
+            Some(mut list) => {
                 let mut popped_elements: Vec<RespDataType> = Vec::new();
                 for _i in 0..self.count {
-                    if let Some(val) = occupied_entry.get_mut().pop_front() {
+                    if let Some(val) = list.pop_front() {
                         popped_elements.push(RespDataType::bulk_string(val.as_str()));
                     } else {
                         break;
@@ -53,7 +51,7 @@ impl RunnableCommand for LPopCommand {
                 }
                 Some(RespDataType::Null)
             }
-            Vacant(_) => Some(RespDataType::Null),
+            None => Some(RespDataType::Null),
         }
     }
 }

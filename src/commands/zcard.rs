@@ -24,9 +24,9 @@ impl RunnableCommand for ZCardCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        if let Some(ss) = store.sorted_sets.lock().await.get(&self.key.to_string()) {
-            return Some(RespDataType::Integer(ss.len()));
+        match store.get_sorted_set(&self.key).await {
+            Some(ss) => return Some(RespDataType::Integer(ss.len())),
+            None => Some(RespDataType::Integer(0)),
         }
-        Some(RespDataType::Integer(0))
     }
 }

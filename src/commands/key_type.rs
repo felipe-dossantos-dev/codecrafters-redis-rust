@@ -26,9 +26,9 @@ impl RunnableCommand for KeyTypeCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        match store.keys.lock().await.get(&self.key) {
-            Some(tp) => Some(tp.to_type_resp()),
-            None => Some(RedisValue::None.to_type_resp()),
+        match store.get_key(&self.key).await {
+            Some(key_type) => Some(key_type.to_type_resp()),
+            None => Some(RedisValue::None.to_type_resp()), // "none" is the default for non-existent keys
         }
     }
 }

@@ -3,7 +3,6 @@ use crate::{resp::RespDataType, store::RedisStore};
 use std::{sync::Arc, vec::IntoIter};
 use tokio::sync::Notify;
 
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct LRangeCommand {
     pub key: String,
@@ -61,7 +60,6 @@ impl LRangeCommand {
     }
 }
 
-
 impl RunnableCommand for LRangeCommand {
     async fn execute(
         &self,
@@ -69,20 +67,20 @@ impl RunnableCommand for LRangeCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        if let Some(list_value) = store.lists.lock().await.get(&self.key.to_string()) {
-            let list_len = list_value.len() as i64;
-            let (start, end) = match self.clone().treat_bounds(list_len) {
-                Some(value) => value,
-                None => return Some(RespDataType::Array(vec![])),
-            };
-
-            let mut result_list: Vec<RespDataType> = Vec::new();
-
-            for i in start..=end {
-                result_list.push(RespDataType::bulk_string(&list_value[i]));
+        match store.get_list(&self.key).await {
+            Some(list_value) => {
+                let list_len = list_value.len() as i64;
+                let (start, end) = match self.clone().treat_bounds(list_len) {
+                    Some(value) => value,
+                    None => return Some(RespDataType::Array(vec![])),
+                };
+                let mut result_list: Vec<RespDataType> = Vec::new();
+                for i in start..=end {
+                    result_list.push(RespDataType::bulk_string(&list_value[i]));
+                }
+                return Some(RespDataType::Array(result_list));
             }
-            return Some(RespDataType::Array(result_list));
+            _ => Some(RespDataType::Array(vec![])),
         }
-        Some(RespDataType::Array(vec![]))
     }
 }

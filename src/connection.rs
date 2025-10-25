@@ -20,7 +20,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<T> {
 
     pub async fn read_request(&mut self) -> std::io::Result<Option<Vec<u8>>> {
         match self.stream.read(&mut self.buffer).await {
-            Ok(0) => Ok(None), // Conexão fechada
+            Ok(0) => Ok(None),
             Ok(n) => Ok(Some(self.buffer[0..n].to_vec())),
             Err(e) => Err(e),
         }

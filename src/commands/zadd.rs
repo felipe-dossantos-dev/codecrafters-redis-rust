@@ -3,8 +3,10 @@ use tokio::sync::Notify;
 use super::traits::ParseableCommand;
 use crate::commands::traits::RunnableCommand;
 use crate::resp::RespDataType;
-use crate::store::RedisStore;
-use crate::values::sorted_set::SortedValue;
+use crate::store::{KeyResult, RedisStore};
+use crate::values::sorted_set::{SortedSet, SortedValue};
+use crate::values::RedisValue;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
@@ -120,12 +122,28 @@ impl RunnableCommand for ZAddCommand {
         store: &Arc<RedisStore>,
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
-        let mut ss = store.get_sorted_set_by_key(&self.key).await;
-        let mut added = 0;
-        for value in self.values.clone() {
-            let count = ss.replace(value);
-            added += count;
+        match store.get_sorted_set(&self.key).await {
+            Some(mut ss) => {
+                let mut added = 0;
+                for value in self.values.clone() {
+                    let count = ss.replace(value);
+                    added += count;
+                }
+                Some(RespDataType::Integer(added))
+            }
+            None => {
+                let mut ss = SortedSet::new();
+                let mut added = 0;
+                for value in self.values.clone() {
+                    let count = ss.replace(value);
+                    added += count;
+                }
+                match store.create(&self.key, RedisValue::ZSet(ss)).await {
+                    KeyResult::Created => Some(RespDataType::Integer(added)),
+                    KeyResult::Updated => Some(RespDataType::error("Sorted Set already exists")),
+                    KeyResult::Error(s) => Some(RespDataType::error(&s)),
+                }
+            }
         }
-        Some(RespDataType::Integer(added))
     }
 }
