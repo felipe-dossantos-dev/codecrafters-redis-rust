@@ -2,7 +2,7 @@ use tokio::sync::Notify;
 
 use super::traits::ParseableCommand;
 use crate::{
-    commands::traits::RunnableCommand, resp::RespDataType, store::RedisStore, values::RedisValue,
+    commands::traits::RunnableCommand, resp::RespDataType, store::RedisStore, types::RedisType,
 };
 use std::{sync::Arc, vec::IntoIter};
 
@@ -28,7 +28,7 @@ impl RunnableCommand for KeyTypeCommand {
     ) -> Option<RespDataType> {
         match store.get_key(&self.key).await {
             Some(key_type) => Some(key_type.to_type_resp()),
-            None => Some(RedisValue::None.to_type_resp()), // "none" is the default for non-existent keys
+            None => Some(RedisType::None.to_type_resp()), // "none" is the default for non-existent keys
         }
     }
 }

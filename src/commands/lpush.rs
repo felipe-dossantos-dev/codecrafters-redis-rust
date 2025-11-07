@@ -1,7 +1,7 @@
 use crate::{
     resp::RespDataType,
     store::{KeyResult, RedisStore},
-    values::RedisValue,
+    types::RedisType,
 };
 use std::{collections::VecDeque, sync::Arc, vec::IntoIter};
 use tokio::sync::Notify;
@@ -48,7 +48,7 @@ impl RunnableCommand for LPushCommand {
                     new_list.push_front(value.clone());
                 }
                 let len = new_list.len() as i64;
-                let result = store.create(&self.key, RedisValue::List(new_list)).await;
+                let result = store.create(&self.key, RedisType::List(new_list)).await;
 
                 match result {
                     KeyResult::Error(e) => Some(RespDataType::error(&e)),

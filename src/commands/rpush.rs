@@ -4,7 +4,7 @@ use super::traits::{ParseableCommand, RunnableCommand};
 use crate::{
     resp::RespDataType,
     store::{KeyResult, RedisStore},
-    values::RedisValue,
+    types::RedisType,
 };
 use std::{sync::Arc, vec::IntoIter};
 use tokio::sync::Notify;
@@ -49,7 +49,7 @@ impl RunnableCommand for RPushCommand {
                     new_list.push_back(value.clone());
                 }
                 let len = new_list.len() as i64;
-                let result = store.create(&self.key, RedisValue::List(new_list)).await;
+                let result = store.create(&self.key, RedisType::List(new_list)).await;
 
                 match result {
                     KeyResult::Error(e) => Some(RespDataType::error(&e)),

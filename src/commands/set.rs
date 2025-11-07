@@ -1,7 +1,7 @@
 use crate::{
     resp::RespDataType,
     store::{KeyResult, RedisStore},
-    values::{key_value::KeyValue, RedisValue},
+    types::{key_value::KeyValue, RedisType},
 };
 
 use super::traits::{ParseableCommand, RunnableCommand};
@@ -30,7 +30,7 @@ impl RunnableCommand for SetCommand {
         _client_notifier: &Arc<Notify>,
     ) -> Option<RespDataType> {
         match store
-            .create_or_update_key(&self.key, RedisValue::String(self.value.clone()))
+            .create_or_update_key(&self.key, RedisType::String(self.value.clone()))
             .await
         {
             KeyResult::Error(e) => Some(RespDataType::error(&e)),

@@ -10,6 +10,7 @@ pub mod ping;
 pub mod rpush;
 pub mod set;
 pub mod traits;
+pub mod xadd;
 pub mod zadd;
 pub mod zcard;
 pub mod zrange;
@@ -38,6 +39,7 @@ use crate::{
         rpush::RPushCommand,
         set::SetCommand,
         traits::{ParseableCommand, RunnableCommand},
+        xadd::XAddCommand,
         zadd::ZAddCommand,
         zcard::ZCardCommand,
         zrange::ZRangeCommand,
@@ -70,6 +72,7 @@ pub enum RedisCommand {
     ZSCORE(ZScoreCommand),
     ZREM(ZRemCommand),
     TYPE(KeyTypeCommand),
+    XADD(XAddCommand),
 }
 
 // TODO - tentar implementar algo como uma linguagem para fazer o parse, algo declarativo
@@ -113,6 +116,7 @@ impl RedisCommand {
                         "ZSCORE" => (ZSCORE, ZScoreCommand),
                         "ZREM" => (ZREM, ZRemCommand),
                         "TYPE" => (TYPE, KeyTypeCommand),
+                        "XADD" => (XADD, XAddCommand),
                     }
                 }
                 RespDataType::BulkString(bytes) if bytes.eq_ignore_ascii_case(b"PING") => {
@@ -165,15 +169,18 @@ impl RunnableCommand for RedisCommand {
             RedisCommand::ZSCORE(cmd) => cmd.execute(client_id, store, client_notifier).await,
             RedisCommand::ZREM(cmd) => cmd.execute(client_id, store, client_notifier).await,
             RedisCommand::TYPE(cmd) => cmd.execute(client_id, store, client_notifier).await,
+            RedisCommand::XADD(cmd) => cmd.execute(client_id, store, client_notifier).await,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::{
         commands::zadd::ZAddOptions,
-        values::{key_value::KeyValue, sorted_set::SortedValue},
+        types::{key_value::KeyValue, sorted_set::SortedValue},
     };
 
     use super::*;
@@ -705,6 +712,61 @@ mod tests {
             result,
             Ok(vec![RedisCommand::TYPE(KeyTypeCommand {
                 key: "sorted_set".to_string(),
+            })])
+        );
+    }
+
+    #[test]
+    fn test_commands_build_xadd() {
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["xadd"])]);
+        assert_eq!(
+            result,
+            Err("XADD command requires a stream key".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec!["xadd", "my_stream"])]);
+        assert_eq!(result, Err("XADD command requires a entry key".to_string()));
+
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
+            "xadd",
+            "my_stream",
+            "0-1",
+        ])]);
+        assert_eq!(
+            result,
+            Err("XADD command requires at least one key-value pair".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
+            "xadd",
+            "my_stream",
+            "0-1",
+            "temperatura",
+        ])]);
+        assert_eq!(
+            result,
+            Err("XADD command requires key-value pair".to_string())
+        );
+
+        let result = RedisCommand::build(vec![RespDataType::new_array(vec![
+            "xadd",
+            "my_stream",
+            "0-1",
+            "temperatura",
+            "10",
+            "humidade",
+            "20",
+        ])]);
+
+        assert_eq!(
+            result,
+            Ok(vec![RedisCommand::XADD(XAddCommand {
+                stream_key: "my_stream".to_string(),
+                entry_key: "0-1".to_string(),
+                values: HashMap::from([
+                    ("temperatura".to_string(), "10".to_string()),
+                    ("humidade".to_string(), "20".to_string())
+                ]),
             })])
         );
     }

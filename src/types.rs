@@ -2,34 +2,35 @@ use std::collections::VecDeque;
 
 use crate::{
     resp::RespDataType,
-    values::{key_value::KeyValue, sorted_set::SortedSet},
+    types::{key_value::KeyValue, sorted_set::SortedSet, stream::RedisStream},
 };
 
 pub mod key_value;
 pub mod sorted_set;
+pub mod stream;
 
 #[derive(Debug, PartialEq)]
-pub enum RedisValue {
+pub enum RedisType {
     None,
     String(KeyValue),
     List(VecDeque<String>),
     ZSet(SortedSet),
     // Set,
     // Hash,
-    // Stream,
+    Stream(RedisStream),
     // VectorSet,
 }
 
-impl RedisValue {
+impl RedisType {
     pub fn to_type_resp(&self) -> RespDataType {
         match self {
-            RedisValue::None => RespDataType::simple_string("none"),
-            RedisValue::String(_) => RespDataType::simple_string("string"),
-            RedisValue::List(_) => RespDataType::simple_string("list"),
-            RedisValue::ZSet(_) => RespDataType::simple_string("zset"),
+            RedisType::None => RespDataType::simple_string("none"),
+            RedisType::String(_) => RespDataType::simple_string("string"),
+            RedisType::List(_) => RespDataType::simple_string("list"),
+            RedisType::ZSet(_) => RespDataType::simple_string("zset"),
+            RedisType::Stream(_) => RespDataType::simple_string("stream"),
             // DataType::Set => RespDataType::simple_string("set"),
             // DataType::Hash => RespDataType::simple_string("hash"),
-            // DataType::Stream => RespDataType::simple_string("stream"),
             // DataType::VectorSet => RespDataType::simple_string("vectorset"),
         }
     }

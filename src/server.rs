@@ -18,8 +18,8 @@ use crate::{
     commands::{traits::RunnableCommand, zadd::ZAddCommand, RedisCommand},
     resp::RespDataType,
     store::RedisStore,
+    types::RedisType,
     utils,
-    values::RedisValue,
 };
 
 #[derive(Debug)]
@@ -124,10 +124,10 @@ mod tests {
         zrange::ZRangeCommand, zrank::ZRankCommand, zrem::ZRemCommand, zscore::ZScoreCommand,
     };
     use crate::resp::RespDataType;
+    use crate::types::key_value::KeyValue;
+    use crate::types::sorted_set::SortedValue;
+    use crate::types::RedisType;
     use crate::utils;
-    use crate::values::key_value::KeyValue;
-    use crate::values::sorted_set::SortedValue;
-    use crate::values::RedisValue;
 
     fn new_client_for_test() -> (RedisClient<DuplexStream>, DuplexStream) {
         let (server_stream, client_stream) = tokio::io::duplex(1024);
@@ -183,7 +183,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from(["zero".to_string()])),
+                RedisType::List(VecDeque::from(["zero".to_string()])),
             )
             .await;
 
@@ -211,7 +211,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from(["zero".to_string()])),
+                RedisType::List(VecDeque::from(["zero".to_string()])),
             )
             .await;
 
@@ -254,7 +254,7 @@ mod tests {
         let (client, _server_stream) = new_client_for_test();
         let store = Arc::new(RedisStore::new());
         store
-            .create_or_update_key(&"mylist".to_string(), RedisValue::List(VecDeque::new()))
+            .create_or_update_key(&"mylist".to_string(), RedisType::List(VecDeque::new()))
             .await;
 
         let command = RedisCommand::LRANGE(LRangeCommand {
@@ -277,7 +277,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from([
+                RedisType::List(VecDeque::from([
                     "one".to_string(),
                     "two".to_string(),
                     "three".to_string(),
@@ -312,7 +312,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from([
+                RedisType::List(VecDeque::from([
                     "a".to_string(),
                     "b".to_string(),
                     "c".to_string(),
@@ -387,7 +387,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from(["one".to_string()])),
+                RedisType::List(VecDeque::from(["one".to_string()])),
             )
             .await;
 
@@ -414,7 +414,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from(["one".to_string()])),
+                RedisType::List(VecDeque::from(["one".to_string()])),
             )
             .await;
 
@@ -438,7 +438,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from(["one".to_string()])),
+                RedisType::List(VecDeque::from(["one".to_string()])),
             )
             .await;
 
@@ -460,7 +460,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from([
+                RedisType::List(VecDeque::from([
                     "1".to_string(),
                     "2".to_string(),
                     "3".to_string(),
@@ -491,7 +491,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"mylist".to_string(),
-                RedisValue::List(VecDeque::from([
+                RedisType::List(VecDeque::from([
                     "1".to_string(),
                     "2".to_string(),
                     "3".to_string(),
@@ -571,7 +571,7 @@ mod tests {
             expired_at_millis: None,
         };
         store
-            .create_or_update_key(&key.clone(), RedisValue::String(value))
+            .create_or_update_key(&key.clone(), RedisType::String(value))
             .await;
 
         let command = RedisCommand::GET(GetCommand {
@@ -594,7 +594,7 @@ mod tests {
             expired_at_millis: Some(utils::now_millis() - 1),
         };
         store
-            .create_or_update_key(&key.clone(), RedisValue::String(value))
+            .create_or_update_key(&key.clone(), RedisType::String(value))
             .await;
 
         let command = RedisCommand::GET(GetCommand {
@@ -662,7 +662,7 @@ mod tests {
         store
             .create_or_update_key(
                 &"myblist".to_string(),
-                RedisValue::List(VecDeque::from(["one".to_string()])),
+                RedisType::List(VecDeque::from(["one".to_string()])),
             )
             .await;
 

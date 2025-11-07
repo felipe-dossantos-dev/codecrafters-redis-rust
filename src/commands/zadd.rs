@@ -4,9 +4,8 @@ use super::traits::ParseableCommand;
 use crate::commands::traits::RunnableCommand;
 use crate::resp::RespDataType;
 use crate::store::{KeyResult, RedisStore};
-use crate::values::sorted_set::{SortedSet, SortedValue};
-use crate::values::RedisValue;
-use std::ops::DerefMut;
+use crate::types::sorted_set::{SortedSet, SortedValue};
+use crate::types::RedisType;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
@@ -138,7 +137,7 @@ impl RunnableCommand for ZAddCommand {
                     let count = ss.replace(value);
                     added += count;
                 }
-                match store.create(&self.key, RedisValue::ZSet(ss)).await {
+                match store.create(&self.key, RedisType::ZSet(ss)).await {
                     KeyResult::Created => Some(RespDataType::Integer(added)),
                     KeyResult::Updated => Some(RespDataType::error("Sorted Set already exists")),
                     KeyResult::Error(s) => Some(RespDataType::error(&s)),
